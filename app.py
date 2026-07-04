@@ -79,15 +79,47 @@ if "owner" in st.session_state:
 
 st.divider()
 
-# ── Build Schedule ────────────────────────────────────────────────────────────
-
-st.subheader("Build Schedule")
+# ── Day Window ────────────────────────────────────────────────────────────────
 
 col_start, col_end = st.columns(2)
 with col_start:
     day_start = st.text_input("Day starts at (HH:MM)", value="09:00")
 with col_end:
     day_end = st.text_input("Day ends at (HH:MM)", value="21:00")
+
+# ── Find Available Time ──────────────────────────────────────────────────────
+
+st.subheader("Find Available Time")
+
+col_dur, col_check = st.columns([3, 1])
+with col_dur:
+    check_duration = st.number_input(
+        "New task duration (min)", min_value=1, max_value=240, value=30, key="check_duration"
+    )
+with col_check:
+    st.write("")
+    st.write("")
+    check_clicked = st.button("Check available slots")
+
+if check_clicked:
+    if "owner" not in st.session_state or not st.session_state.owner.get_all_tasks():
+        st.warning("Add an owner, pet, and at least one task first.")
+    else:
+        tasks = st.session_state.owner.get_all_tasks()
+        scheduler = Scheduler(tasks, day_start=day_start.strip(), day_end=day_end.strip())
+        slots = scheduler.find_available_slots(int(check_duration))
+        if slots:
+            st.success(f"Open blocks of at least {int(check_duration)} min:")
+            for start, end in slots:
+                st.write(f"- {start}–{end}")
+        else:
+            st.info(f"No open block of at least {int(check_duration)} min found in the day.")
+
+st.divider()
+
+# ── Build Schedule ────────────────────────────────────────────────────────────
+
+st.subheader("Build Schedule")
 
 if st.button("Generate schedule"):
     if "owner" not in st.session_state or not st.session_state.owner.get_all_tasks():

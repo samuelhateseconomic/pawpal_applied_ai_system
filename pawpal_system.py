@@ -220,6 +220,42 @@ class Scheduler:
 
         return sorted(floating + anchors, key=lambda t: _parse_hhmm(t.start_time or "00:00"))
 
+    def find_available_slots(self, duration_minutes: int) -> list[tuple[str, str]]:
+        """
+        Return open (start, end) HH:MM blocks within the day window that are
+        at least ``duration_minutes`` long, based on tasks that already have
+        a start_time (anchors or previously assigned tasks).
+
+        Use this to answer "what times are free for a new task of this length?"
+        before adding/pinning it — it does not assign or modify any tasks.
+        """
+        day_start_min = _parse_hhmm(self.day_start)
+        day_end_min = _parse_hhmm(self.day_end)
+
+        busy = sorted(
+            (_parse_hhmm(t.start_time), _parse_hhmm(t.start_time) + t.duration_minutes)
+            for t in self.tasks
+            if t.start_time is not None and t.completion_status == "pending"
+        )
+
+        merged: list[tuple[int, int]] = []
+        for start, end in busy:
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+
+        slots: list[tuple[str, str]] = []
+        cursor = day_start_min
+        for start, end in merged:
+            if start - cursor >= duration_minutes:
+                slots.append((_format_hhmm(cursor), _format_hhmm(start)))
+            cursor = max(cursor, end)
+        if day_end_min - cursor >= duration_minutes:
+            slots.append((_format_hhmm(cursor), _format_hhmm(day_end_min)))
+
+        return slots
+
     def sort_by_time(self) -> list[Task]:
         """
         Return all tasks sorted by their assigned start_time in ascending order.

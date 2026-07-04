@@ -104,13 +104,16 @@ For a pet owner managing a real day, unused gaps matter. If a vet appointment is
 **a. How you used AI**
 
 - How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
+In this project, I use AI for brainstorming, and coding with me.
 - What kinds of prompts or questions were most helpful?
-
+The most helpful prompt is "Help me write the test to test all the behaviors from happy paths to edge paths where everything can go wrong of the app."
 **b. Judgment and verification**
 
 - Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+I did when AI tried to fix the function with the certain timeline that eliminate the user right to add their refered time.
 
+- How did you evaluate or verify what the AI suggested?
+I read all the code before it changed and I think understand the skeleton of the project help alot to keep up with the AI flow.
 ---
 
 ## 4. Testing and Verification
@@ -118,12 +121,21 @@ For a pet owner managing a real day, unused gaps matter. If a vet appointment is
 **a. What you tested**
 
 - What behaviors did you test?
+1. Add Pets
+2. Add Tasks with Time
+3. Schedule Tasks
+4. Explain the Schedule
+
 - Why were these tests important?
+Because these are all fundamental functions of the test, the app could not run if the base can not provide a strong foundation.
 
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
+5 stars
 - What edge cases would you test next if you had more time?
+1. Input Validation
+2. Cleaning the task if it is done - MAYBE
 
 ---
 
@@ -132,13 +144,14 @@ For a pet owner managing a real day, unused gaps matter. If a vet appointment is
 **a. What went well**
 
 - What part of this project are you most satisfied with?
+I believe the revise part is the most satisfied.
 
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
+I think I can try to add the function where two pets can be considered to have the activity together.
 
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
-
-chore: add class skeletons from UML
+I have to pay attention to detail because AI can mess with it if I pay no attention and it took me a whole hour to fix it as the session_state part as I thought it was already fixed.

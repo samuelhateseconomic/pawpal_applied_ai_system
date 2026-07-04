@@ -148,7 +148,110 @@ class TestScheduleTasks:
         assert any("exceed" in c for c in result.conflicts)
 
 
-# ── 4. Explain the Schedule ───────────────────────────────────────────────────
+# ── 4. Find Available Slots ───────────────────────────────────────────────────
+
+class TestFindAvailableSlots:
+    def test_happy_gap_between_anchors_found(self):
+        tasks = [
+            Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy"),
+            Task("Vet",  60, "high", start_time="16:00", pet_name="Buddy"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert ("10:00", "16:00") in slots
+
+    def test_happy_empty_day_returns_full_window(self):
+        scheduler = Scheduler([], day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert slots == [("09:00", "21:00")]
+
+    def test_edge_slot_too_small_is_excluded(self):
+        tasks = [
+            Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy"),
+            Task("Vet",  60, "high", start_time="09:20", pet_name="Buddy"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert all(s[0] != "09:00" for s in slots)  # the tiny overlap gap isn't offered
+
+    def test_edge_overlapping_anchors_merged_before_gap_check(self):
+        tasks = [
+            Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy"),
+            Task("Bath", 60, "high", start_time="09:30", pet_name="Buddy"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="12:00")
+        slots = scheduler.find_available_slots(30)
+        assert slots == [("10:30", "12:00")]
+
+    def test_edge_floating_tasks_without_time_are_ignored(self):
+        tasks = [Task("Feeding", 15, "medium", pet_name="Buddy")]  # no start_time yet
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert slots == [("09:00", "21:00")]
+
+    def test_edge_no_slot_big_enough_returns_empty(self):
+        tasks = [Task("Busy", 700, "high", start_time="09:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(60)
+        assert slots == []
+
+    def test_edge_slot_exactly_matching_duration_is_included(self):
+        tasks = [
+            Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy"),
+            Task("Vet",  60, "high", start_time="10:30", pet_name="Buddy"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)  # gap is exactly 30 min
+        assert ("10:00", "10:30") in slots
+
+    def test_edge_completed_tasks_are_ignored(self):
+        tasks = [
+            Task("Old Walk", 60, "high", start_time="09:00", pet_name="Buddy",
+                 completion_status="complete"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert slots == [("09:00", "21:00")]  # completed task's time is freed up
+
+    def test_edge_anchor_at_day_start_has_no_leading_gap(self):
+        tasks = [Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="10:30")
+        slots = scheduler.find_available_slots(30)
+        assert slots == [("10:00", "10:30")]  # nothing before day_start
+
+    def test_edge_anchor_ending_exactly_at_day_end_has_no_trailing_gap(self):
+        tasks = [Task("Walk", 60, "high", start_time="20:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert all(end != "21:00" for _, end in slots) or slots == [("09:00", "20:00")]
+
+    def test_happy_multiple_separate_gaps_all_returned(self):
+        tasks = [
+            Task("Walk", 30, "high", start_time="10:00", pet_name="Buddy"),
+            Task("Vet",  30, "high", start_time="14:00", pet_name="Buddy"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="16:00")
+        slots = scheduler.find_available_slots(30)
+        assert slots == [("09:00", "10:00"), ("10:30", "14:00"), ("14:30", "16:00")]
+
+    def test_edge_input_order_does_not_affect_result(self):
+        tasks = [
+            Task("Vet",  60, "high", start_time="16:00", pet_name="Buddy"),
+            Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy"),
+        ]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        slots = scheduler.find_available_slots(30)
+        assert ("10:00", "16:00") in slots
+
+    def test_happy_default_day_window_used_when_not_specified(self):
+        tasks = [Task("Walk", 30, "high", start_time="10:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks)  # default day_start=09:00, day_end=21:00
+        slots = scheduler.find_available_slots(30)
+        assert ("09:00", "10:00") in slots
+        assert ("10:30", "21:00") in slots
+
+
+# ── 5. Explain the Schedule ───────────────────────────────────────────────────
 
 class TestExplainSchedule:
     def test_happy_output_contains_task_titles(self, pet_with_tasks):

@@ -133,6 +133,25 @@ timedelta(weeks=1)  # for frequency="weekly" → same day next week
 
 `timedelta` handles month and year boundaries automatically (e.g. January 31 + 1 day = February 1). The new task is appended to the pet's task list with `completion_status="pending"` so it shows up in the next schedule automatically.
 
+## 💾 Persistence — Save Workflow
+
+PawPal+ automatically saves state to a local JSON file (`pawpal_save.json`) so an owner's pets and tasks survive a page reload or app restart.
+
+**How it works:**
+
+1. **On startup**, `app.py` checks if `owner` is already in `st.session_state`. If not, it calls `load_owner()`, which reads `pawpal_save.json` and rebuilds the `Owner` → `Pet` → `Task` objects. If the file doesn't exist yet (first run), `load_owner()` returns `None` and the app starts fresh.
+2. **On every mutation** — clicking "Set Owner & Pet" or "Add task" — `app.py` calls `save_owner(st.session_state.owner)` right after the change. `save_owner()` converts the whole object tree to a dict with `dataclasses.asdict()` and writes it to `pawpal_save.json` with `json.dumps(..., indent=2)`.
+3. Both functions use only the Python standard library (`json`, `pathlib`) — no new dependencies.
+
+**Files modified:**
+
+| File | Change |
+|---|---|
+| `pawpal_system.py` | Added `save_owner(owner, path="pawpal_save.json")` and `load_owner(path="pawpal_save.json")` at module level. |
+| `app.py` | Imports `save_owner`/`load_owner`; calls `load_owner()` once at startup, and `save_owner(...)` after "Set Owner & Pet" and "Add task". |
+
+Read-only actions like "Check available slots" and "Generate schedule" don't call `save_owner` — they don't change any task data, so there's nothing new to persist.
+
 ## 🧪 Testing PawPal+
 ```PowerShell:
 
@@ -212,14 +231,34 @@ When a conflict is flagged, the app displays: *"Try changing a task's fixed time
   Anchor: Vet visit pinned at 10:00 (ends 11:00)
   Windows: [09:00-10:00] and [11:00-21:00]
 
-  09:00 | [HIGH  ] Medication           5 min  
-  09:05 | [HIGH  ] Feeding              10 min  
-  09:15 | [HIGH  ] Morning walk         30 min  
-  10:00 | [HIGH  ] Vet visit            60 min  (anchor)
-  11:00 | [LOW   ] Grooming             20 min  
-  11:20 | [LOW   ] Play session         20 min  
+╭────────┬──────────────────────┬────────────┬────────────┬─────────────╮
+│ Time   │ Task                 │ Priority   │ Duration   │ Frequency   │
+├────────┼──────────────────────┼────────────┼────────────┼─────────────┤
+│ 09:00  │ 💊 Medication        │ HIGH       │ 5 min      │ daily       │
+│ 09:05  │ 🍽️ Feeding           │ HIGH       │ 10 min     │ daily       │
+│ 09:15  │ 🚶 Morning walk      │ HIGH       │ 30 min     │ daily       │
+│ 10:00  │ 🩺 Vet visit (anchor)│ HIGH       │ 60 min     │ as_needed   │
+│ 11:00  │ 🧼 Grooming          │ LOW        │ 20 min     │ weekly      │
+│ 11:20  │ 🎾 Play session      │ LOW        │ 20 min     │ as_needed   │
+╰────────┴──────────────────────┴────────────┴────────────┴─────────────╯
 
-No conflicts detected.
+✅ No conflicts detected.
 ```
 
+*(HIGH renders red, LOW renders green in a real terminal — flattened to plain text here.)*
+
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or Streamlit Cloud link here -->
+
+## 🎨 CLI Output Formatting
+
+`main.py` formats the schedule with three readability features:
+
+| Feature | How it's done |
+|---|---|
+| **Structured table** | [`tabulate`](https://pypi.org/project/tabulate/) (`tablefmt="rounded_outline"`) renders the schedule as a bordered table instead of manually padded `print()` lines. Added to `requirements.txt`. |
+| **Task emojis** | `task_emoji(title)` keyword-matches the task title (`walk`, `feed`, `vet`, `medic`, `groom`, `play`/`fetch`) against an emoji dict, defaulting to 🐾 for anything unmatched. |
+| **Color-coded priority** | `colored_priority(priority)` wraps the priority text in ANSI escape codes — red for `high`, yellow for `medium`, green for `low` — using plain `\033[...m` sequences (no extra dependency needed since modern terminals support ANSI natively). |
+
+The conflicts summary also gets a colored/emoji treatment: `✅ No conflicts detected.` in green, or `⚠️ Conflicts:` in red with each line prefixed by a red `!`.
+
+`sys.stdout.reconfigure(encoding="utf-8")` is set at the top of `main.py` so emojis and box-drawing characters render correctly on Windows terminals, which otherwise default to `cp1252`.
