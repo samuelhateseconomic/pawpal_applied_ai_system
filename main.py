@@ -36,13 +36,13 @@ biscuit = owner.add_pet("Biscuit", "dog")
 
 # Anchor: Vet visit pinned to 10:00 (60 min) -> ends 11:00
 # Floating tasks should fill 09:00-10:00 first, then spill to 11:00+
-mochi.add_task("Vet visit",     60, "high",   frequency="as_needed", start_time="10:00")
-mochi.add_task("Feeding",       10, "high",   frequency="daily")       # should fill 09:00 window
-mochi.add_task("Grooming",      20, "low",    frequency="weekly")      # low — goes after 11:00
+mochi.add_task("Vet visit",     60, "high",   frequency_unit="as_needed", start_time="10:00")
+mochi.add_task("Feeding",       10, "high",   frequency_count=1, frequency_unit="day")   # should fill 09:00 window
+mochi.add_task("Grooming",      20, "low",    frequency_count=1, frequency_unit="week")  # low — goes after 11:00
 
-biscuit.add_task("Medication",   5, "high",   frequency="daily")       # should fill 09:00 window
-biscuit.add_task("Morning walk", 30, "high",  frequency="daily")       # should fill 09:00 window
-biscuit.add_task("Play session", 20, "low",   frequency="as_needed")   # low — goes after 11:00
+biscuit.add_task("Medication",   5, "high",   frequency_count=1, frequency_unit="day")   # should fill 09:00 window
+biscuit.add_task("Morning walk", 30, "high",  frequency_count=1, frequency_unit="day")   # should fill 09:00 window
+biscuit.add_task("Play session", 20, "low",   frequency_unit="as_needed")                # low — goes after 11:00
 
 print(f"{BOLD}=== Window-filling schedule ==={RESET}")
 print("  Anchor: Vet visit pinned at 10:00 (ends 11:00)")
@@ -56,7 +56,7 @@ rows = [
         f"{task_emoji(t.title)} {t.title}" + (" (anchor)" if t.title == "Vet visit" else ""),
         colored_priority(t.priority),
         f"{t.duration_minutes} min",
-        t.frequency,
+        t.frequency_label(),
     ]
     for t in result.tasks
 ]

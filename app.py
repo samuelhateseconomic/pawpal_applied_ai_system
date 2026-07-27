@@ -1,3 +1,5 @@
+from datetime import time
+
 import streamlit as st
 from pawpal_system import Owner, Scheduler, save_owner, load_owner
 
@@ -41,13 +43,14 @@ with col2:
 with col3:
     priority = st.selectbox("Priority", ["low", "medium", "high"], index=2)
 with col4:
-    start_time = st.text_input("Fixed time (HH:MM)", value="", placeholder="e.g. 09:00")
+    pin_time = st.checkbox("Fixed time?")
+    fixed_time = st.time_input("Time", value=time(9, 0), disabled=not pin_time, label_visibility="collapsed")
 
 if st.button("Add task"):
     if "current_pet" not in st.session_state:
         st.warning("Set an owner and pet first.")
     else:
-        pinned = start_time.strip() or None
+        pinned = fixed_time.strftime("%H:%M") if pin_time else None
         result = st.session_state.current_pet.add_task(
             task_title, int(duration), priority, start_time=pinned
         )
@@ -83,9 +86,9 @@ st.divider()
 
 col_start, col_end = st.columns(2)
 with col_start:
-    day_start = st.text_input("Day starts at (HH:MM)", value="09:00")
+    day_start = st.time_input("Day starts at", value=time(9, 0)).strftime("%H:%M")
 with col_end:
-    day_end = st.text_input("Day ends at (HH:MM)", value="21:00")
+    day_end = st.time_input("Day ends at", value=time(21, 0)).strftime("%H:%M")
 
 # ── Find Available Time ──────────────────────────────────────────────────────
 
@@ -106,7 +109,7 @@ if check_clicked:
         st.warning("Add an owner, pet, and at least one task first.")
     else:
         tasks = st.session_state.owner.get_all_tasks()
-        scheduler = Scheduler(tasks, day_start=day_start.strip(), day_end=day_end.strip())
+        scheduler = Scheduler(tasks, day_start=day_start, day_end=day_end)
         slots = scheduler.find_available_slots(int(check_duration))
         if slots:
             st.success(f"Open blocks of at least {int(check_duration)} min:")
@@ -126,7 +129,7 @@ if st.button("Generate schedule"):
         st.warning("Add an owner, pet, and at least one task first.")
     else:
         tasks = st.session_state.owner.get_all_tasks()
-        scheduler = Scheduler(tasks, day_start=day_start.strip(), day_end=day_end.strip())
+        scheduler = Scheduler(tasks, day_start=day_start, day_end=day_end)
         result = scheduler.schedule()
 
         if not result.tasks:
@@ -140,7 +143,7 @@ if st.button("Generate schedule"):
                     "Task":     t.title,
                     "Duration": f"{t.duration_minutes} min",
                     "Priority": t.priority.capitalize(),
-                    "Frequency": t.frequency,
+                    "Frequency": t.frequency_label(),
                 }
                 for t in result.tasks
             ])
@@ -152,7 +155,9 @@ if st.button("Generate schedule"):
                         "**Tip:** To resolve this, try one of the following:\n"
                         "- Change a task's **Fixed time** so it doesn't overlap.\n"
                         "- Lower its **priority** so the scheduler places it later.\n"
-                        "- Shorten the **duration** to fit within the available gap."
+                        "- Shorten the **duration** to fit within the available gap.\n"
+                        "- If a task falls outside the day window, move its **Fixed time** "
+                        "inside **Day starts at / Day ends at**, or widen that window."
                     )
             else:
                 st.success("Schedule looks great — no conflicts detected!")

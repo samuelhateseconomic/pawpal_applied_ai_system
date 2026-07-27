@@ -1,5 +1,8 @@
+import json
+from datetime import date, timedelta
+
 import pytest
-from pawpal_system import Owner, Pet, Task, Scheduler
+from pawpal_system import Owner, Pet, Task, Scheduler, save_owner, load_owner, _active_days
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -290,3 +293,371 @@ class TestExplainSchedule:
         scheduler = Scheduler([task])
         output = scheduler.explain_reasoning()
         assert output == "No pending tasks to schedule."
+
+
+# ── 6. Pet Notes ──────────────────────────────────────────────────────────────
+
+class TestPetNotes:
+    def test_happy_default_notes_is_empty(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        assert pet.notes == ""
+
+    def test_happy_edit_pet_sets_notes(self, owner):
+        owner.add_pet("Buddy", "dog")
+        pet = owner.edit_pet("Buddy", notes="Loves other dogs, good with cats")
+        assert pet.notes == "Loves other dogs, good with cats"
+
+    def test_happy_notes_round_trip_through_save_and_load(self, owner, tmp_path):
+        owner.add_pet("Buddy", "dog")
+        owner.edit_pet("Buddy", notes="Needs a friend for walks")
+        path = str(tmp_path / "save.json")
+        save_owner(owner, path)
+        loaded = load_owner(path)
+        assert loaded.get_pets()[0].notes == "Needs a friend for walks"
+
+
+# ── 7. Edit Pet ───────────────────────────────────────────────────────────────
+
+class TestEditPet:
+    def test_happy_rename_cascades_to_tasks(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        owner.edit_pet("Buddy", new_name="Max")
+        assert owner.get_pets()[0].pet_name == "Max"
+        assert all(t.pet_name == "Max" for t in pet.get_tasks())
+
+    def test_edge_rename_collision_rejected(self, owner):
+        owner.add_pet("Buddy", "dog")
+        owner.add_pet("Whiskers", "cat")
+        result = owner.edit_pet("Buddy", new_name="Whiskers")
+        assert result is None
+        assert owner.get_pets()[0].pet_name == "Buddy"  # unmodified
+
+    def test_happy_species_only_edit(self, owner):
+        owner.add_pet("Goldie", "fish")
+        pet = owner.edit_pet("Goldie", species="axolotl")
+        assert pet.species == "axolotl"
+        assert pet.pet_name == "Goldie"  # unchanged
+
+    def test_happy_notes_only_edit_leaves_other_fields(self, owner):
+        owner.add_pet("Buddy", "dog")
+        pet = owner.edit_pet("Buddy", notes="Shy around strangers")
+        assert pet.notes == "Shy around strangers"
+        assert pet.pet_name == "Buddy"
+        assert pet.species == "dog"
+
+    def test_edge_edit_nonexistent_pet_returns_none(self, owner):
+        assert owner.edit_pet("Ghost", species="cat") is None
+
+
+# ── 8. Edit Task ──────────────────────────────────────────────────────────────
+
+class TestEditTask:
+    def test_happy_edit_multiple_fields(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        task = pet.edit_task("Walk", duration_minutes=45, priority="low", description="slower pace")
+        assert task.duration_minutes == 45
+        assert task.priority == "low"
+        assert task.description == "slower pace"
+
+    def test_happy_rename_task(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        task = pet.edit_task("Walk", new_title="Evening Walk")
+        assert task.title == "Evening Walk"
+
+    def test_edge_rename_collision_rejected(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        pet.add_task("Feed", 15, "medium")
+        result = pet.edit_task("Walk", new_title="Feed")
+        assert result is None
+        assert any(t.title == "Walk" for t in pet.get_tasks())  # unmodified
+
+    def test_happy_explicit_none_unpins_anchor(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high", start_time="08:00")
+        task = pet.edit_task("Walk", start_time=None)
+        assert task.start_time is None
+
+    def test_edge_no_fields_supplied_leaves_task_unchanged(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high", start_time="08:00")
+        before = pet.get_tasks()[0]
+        task = pet.edit_task("Walk")
+        assert task.duration_minutes == before.duration_minutes
+        assert task.start_time == "08:00"
+
+    def test_edge_edit_nonexistent_task_returns_none(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        assert pet.edit_task("Ghost", priority="low") is None
+
+
+# ── 9. Delete Task ────────────────────────────────────────────────────────────
+
+class TestDeleteTask:
+    def test_happy_delete_removes_task(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        result = pet.delete_task("Walk")
+        assert result is True
+        assert pet.get_tasks() == []
+
+    def test_edge_delete_nonexistent_returns_false(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        assert pet.delete_task("Ghost") is False
+
+    def test_edge_title_freed_after_delete(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        pet.delete_task("Walk")
+        result = pet.add_task("Walk", 20, "medium")
+        assert result is not None
+        assert len(pet.get_tasks()) == 1
+
+
+# ── 10. Frequency Defaults & Recurrence ──────────────────────────────────────
+
+class TestFrequencyDefaults:
+    def test_happy_default_is_once_per_day(self):
+        task = Task("Feed", 10, "high")
+        assert task.frequency_count == 1
+        assert task.frequency_unit == "day"
+
+    def test_happy_frequency_label_formats(self):
+        assert Task("Feed", 10, "high", frequency_count=2, frequency_unit="day").frequency_label() == "2x/day"
+        assert Task("Vet", 60, "high", frequency_unit="as_needed").frequency_label() == "as needed"
+
+    def test_happy_next_occurrence_day(self):
+        task = Task("Feed", 10, "high", frequency_unit="day")
+        nxt = task.next_occurrence()
+        expected = date.today() + timedelta(days=1)
+        assert nxt.due_date == str(expected)
+        assert nxt.frequency_unit == "day"
+
+    def test_happy_next_occurrence_week(self):
+        task = Task("Groom", 20, "low", frequency_count=1, frequency_unit="week")
+        nxt = task.next_occurrence()
+        expected = date.today() + timedelta(weeks=1)
+        assert nxt.due_date == str(expected)
+
+    def test_happy_next_occurrence_month(self):
+        task = Task("Nail trim", 15, "low", frequency_unit="month")
+        nxt = task.next_occurrence()
+        expected = date.today() + timedelta(days=30)
+        assert nxt.due_date == str(expected)
+
+    def test_edge_next_occurrence_as_needed_returns_none(self):
+        task = Task("Vet visit", 60, "high", frequency_unit="as_needed")
+        assert task.next_occurrence() is None
+
+    def test_happy_next_occurrence_carries_frequency_forward(self):
+        task = Task("Groom", 20, "low", frequency_count=3, frequency_unit="week")
+        nxt = task.next_occurrence()
+        assert nxt.frequency_count == 3
+        assert nxt.frequency_unit == "week"
+
+
+# ── 11. Legacy Save-File Migration ───────────────────────────────────────────
+
+class TestLegacyLoadMigration:
+    def _write(self, tmp_path, data):
+        path = tmp_path / "legacy.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return str(path)
+
+    def test_happy_legacy_daily_migrates(self, tmp_path):
+        path = self._write(tmp_path, {
+            "owner_name": "Jordan",
+            "pets": [{
+                "pet_name": "Mochi", "species": "cat",
+                "tasks": [{
+                    "title": "Feed", "duration_minutes": 10, "priority": "high",
+                    "description": "", "frequency": "daily",
+                    "completion_status": "pending", "start_time": None,
+                    "due_date": None, "pet_name": "Mochi",
+                }],
+            }],
+        })
+        owner = load_owner(path)
+        task = owner.get_all_tasks()[0]
+        assert task.frequency_count == 1
+        assert task.frequency_unit == "day"
+
+    def test_happy_legacy_weekly_and_as_needed_migrate(self, tmp_path):
+        path = self._write(tmp_path, {
+            "owner_name": "Jordan",
+            "pets": [{
+                "pet_name": "Mochi", "species": "cat", "tasks": [
+                    {"title": "Groom", "duration_minutes": 20, "priority": "low",
+                     "description": "", "frequency": "weekly",
+                     "completion_status": "pending", "start_time": None,
+                     "due_date": None, "pet_name": "Mochi"},
+                    {"title": "Vet", "duration_minutes": 60, "priority": "high",
+                     "description": "", "frequency": "as_needed",
+                     "completion_status": "pending", "start_time": None,
+                     "due_date": None, "pet_name": "Mochi"},
+                ],
+            }],
+        })
+        owner = load_owner(path)
+        groom, vet = owner.get_all_tasks()
+        assert (groom.frequency_count, groom.frequency_unit) == (1, "week")
+        assert vet.frequency_unit == "as_needed"
+
+    def test_happy_legacy_pet_defaults_notes_to_empty(self, tmp_path):
+        path = self._write(tmp_path, {
+            "owner_name": "Jordan",
+            "pets": [{"pet_name": "Mochi", "species": "cat", "tasks": []}],
+        })
+        owner = load_owner(path)
+        assert owner.get_pets()[0].notes == ""
+
+    def test_happy_new_format_file_passes_through_unchanged(self, tmp_path):
+        path = self._write(tmp_path, {
+            "owner_name": "Jordan",
+            "pets": [{
+                "pet_name": "Mochi", "species": "cat", "notes": "friendly",
+                "tasks": [{
+                    "title": "Feed", "duration_minutes": 10, "priority": "high",
+                    "description": "", "frequency_count": 2, "frequency_unit": "day",
+                    "completion_status": "pending", "start_time": None,
+                    "due_date": None, "pet_name": "Mochi",
+                }],
+            }],
+        })
+        owner = load_owner(path)
+        pet = owner.get_pets()[0]
+        assert pet.notes == "friendly"
+        task = pet.get_tasks()[0]
+        assert task.frequency_count == 2
+        assert task.frequency_unit == "day"
+
+    def test_happy_save_then_load_round_trip_preserves_new_fields(self, owner, tmp_path):
+        pet = owner.add_pet("Mochi", "cat")
+        owner.edit_pet("Mochi", notes="Loves company")
+        pet.add_task("Feed", 10, "high", frequency_count=2, frequency_unit="day")
+        path = str(tmp_path / "save.json")
+        save_owner(owner, path)
+        loaded = load_owner(path)
+        loaded_pet = loaded.get_pets()[0]
+        assert loaded_pet.notes == "Loves company"
+        task = loaded_pet.get_tasks()[0]
+        assert task.frequency_count == 2
+        assert task.frequency_unit == "day"
+
+
+# ── 12. Same-Day Multiplicity ─────────────────────────────────────────────────
+
+class TestSameDayMultiplicity:
+    def test_happy_two_per_day_gets_two_distinct_times(self, owner):
+        pet = owner.add_pet("Mochi", "cat")
+        pet.add_task("Feed", 10, "high", frequency_count=2, frequency_unit="day")
+        scheduler = Scheduler(pet.get_tasks())
+        result = scheduler.schedule()
+        feed_occurrences = [t for t in result.tasks if t.title.startswith("Feed")]
+        assert len(feed_occurrences) == 2
+        times = {t.start_time for t in feed_occurrences}
+        assert len(times) == 2  # distinct, non-overlapping start times
+
+    def test_happy_original_task_not_mutated_by_expansion(self, owner):
+        pet = owner.add_pet("Mochi", "cat")
+        pet.add_task("Feed", 10, "high", frequency_count=2, frequency_unit="day")
+        scheduler = Scheduler(pet.get_tasks())
+        scheduler.schedule()
+        original = pet.get_tasks()[0]
+        assert original.frequency_count == 2
+        assert original.start_time is None
+
+    def test_happy_pinned_multi_count_keeps_first_occurrence_time(self, owner):
+        pet = owner.add_pet("Mochi", "cat")
+        pet.add_task("Feed", 10, "high", frequency_count=2, frequency_unit="day", start_time="09:00")
+        scheduler = Scheduler(pet.get_tasks())
+        result = scheduler.schedule()
+        first = next(t for t in result.tasks if t.title == "Feed (1/2)")
+        assert first.start_time == "09:00"
+
+    def test_edge_double_schedule_call_is_idempotent(self, owner):
+        pet = owner.add_pet("Mochi", "cat")
+        pet.add_task("Feed", 10, "high", frequency_count=2, frequency_unit="day")
+        scheduler = Scheduler(pet.get_tasks())
+        first_result = scheduler.schedule()
+        second_result = scheduler.schedule()
+        assert (sorted(t.title for t in first_result.tasks)
+                == sorted(t.title for t in second_result.tasks))
+
+
+# ── 13. Week/Month Day Selection ──────────────────────────────────────────────
+
+class TestWeekMonthDaySelection:
+    def test_happy_distinct_indices_for_count(self):
+        days = _active_days(7, 3)
+        assert len(days) == 3
+        assert all(0 <= d < 7 for d in days)
+
+    def test_edge_count_one_returns_day_zero(self):
+        assert _active_days(7, 1) == {0}
+
+    def test_edge_count_at_least_period_length_returns_all_days(self):
+        assert _active_days(7, 10) == set(range(7))
+
+    def test_edge_count_zero_returns_empty(self):
+        assert _active_days(7, 0) == set()
+
+    def test_happy_week_task_appears_on_exactly_count_days(self):
+        task = Task("Groom", 20, "low", frequency_count=3, frequency_unit="week")
+        scheduler = Scheduler([task])
+        appearances = sum(
+            1 for d in range(7) if scheduler.filter_recurring(day_of_week=d)
+        )
+        assert appearances == 3
+
+    def test_happy_month_task_uses_day_of_month(self):
+        task = Task("Nail trim", 15, "low", frequency_count=2, frequency_unit="month")
+        scheduler = Scheduler([task])
+        appearances = sum(
+            1 for d in range(1, 31) if scheduler.filter_recurring(day_of_month=d)
+        )
+        assert appearances == 2
+
+    def test_edge_as_needed_never_appears(self):
+        task = Task("Vet visit", 60, "high", frequency_unit="as_needed")
+        scheduler = Scheduler([task])
+        assert all(
+            not scheduler.filter_recurring(day_of_week=d) for d in range(7)
+        )
+
+
+# ── 14. Out-of-Window Detection ───────────────────────────────────────────────
+
+class TestOutOfWindowDetection:
+    def test_happy_anchor_ending_after_day_end_flagged(self):
+        tasks = [Task("Late walk", 20, "high", start_time="21:00", pet_name="Mochi")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        result = scheduler.schedule()
+        assert any("Late walk" in c and "runs past" in c for c in result.conflicts)
+
+    def test_happy_anchor_starting_before_day_start_flagged(self):
+        tasks = [Task("Early walk", 25, "high", start_time="08:00", pet_name="Moch")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        result = scheduler.schedule()
+        assert any("Early walk" in c and "starts before" in c for c in result.conflicts)
+
+    def test_happy_task_fully_inside_window_not_flagged(self):
+        tasks = [Task("Walk", 20, "high", start_time="10:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        result = scheduler.schedule()
+        assert not any("OUT OF WINDOW" in c for c in result.conflicts)
+
+    def test_edge_task_ending_exactly_at_day_end_not_flagged(self):
+        tasks = [Task("Walk", 60, "high", start_time="20:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        result = scheduler.schedule()
+        assert not any("OUT OF WINDOW" in c for c in result.conflicts)
+
+    def test_edge_task_starting_exactly_at_day_start_not_flagged(self):
+        tasks = [Task("Walk", 60, "high", start_time="09:00", pet_name="Buddy")]
+        scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
+        result = scheduler.schedule()
+        assert not any("OUT OF WINDOW" in c for c in result.conflicts)

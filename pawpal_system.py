@@ -1,11 +1,19 @@
 from __future__ import annotations
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from datetime import date, timedelta
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 _PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+_UNSET = object()  # sentinel: "argument not supplied" (distinct from None, which can be a real value)
+
+_LEGACY_FREQUENCY_MAP = {
+    "daily": (1, "day"),
+    "weekly": (1, "week"),
+    "as_needed": (1, "as_needed"),
+}
 
 
 class ScheduleResult(NamedTuple):
@@ -19,6 +27,20 @@ def _parse_hhmm(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _active_days(period_length: int, count: int) -> set[int]:
+    """
+    Return `count` evenly-spaced 0-based day indices within a period of
+    `period_length` days (e.g. period_length=7 for a week). Used to
+    auto-spread a week/month multi-count task across the period without a
+    real calendar engine — self-contained day-of-period math only.
+    """
+    if count <= 0:
+        return set()
+    count = min(count, period_length)  # can't have more occurrences than days in the period
+    step = period_length / count
+    return {int(i * step) for i in range(count)}
+
+
 def _format_hhmm(minutes: int) -> str:
     """Minutes from midnight -> 'HH:MM'."""
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
@@ -30,7 +52,8 @@ class Task:
     duration_minutes: int
     priority: str               # "high", "medium", "low"
     description: str = ""
-    frequency: str = "daily"    # "daily", "weekly", "as_needed"
+    frequency_count: int = 1       # occurrences per frequency_unit period; ignored when unit == "as_needed"
+    frequency_unit: str = "day"    # "day", "week", "month", "as_needed"
     completion_status: str = "pending"  # "pending", "complete"
     start_time: str | None = None  # "HH:MM" format, e.g. "09:00"
     due_date: str | None = None    # "YYYY-MM-DD" format
@@ -42,6 +65,12 @@ class Task:
     def mark_incomplete(self) -> None:
         self.completion_status = "pending"
 
+    def frequency_label(self) -> str:
+        """Human-readable frequency string for display, e.g. '2x/day', 'as needed'."""
+        if self.frequency_unit == "as_needed":
+            return "as needed"
+        return f"{self.frequency_count}x/{self.frequency_unit}"
+
     def next_occurrence(self) -> Task | None:
         """
         Return a new pending Task for the next scheduled occurrence, or None
@@ -49,12 +78,15 @@ class Task:
 
         timedelta(days=1) adds exactly 1 day to today's date, handling
         month and year boundaries automatically (e.g. Jan 31 + 1 = Feb 1).
-        timedelta(weeks=1) is shorthand for timedelta(days=7).
+        timedelta(weeks=1) is shorthand for timedelta(days=7). "month" uses a
+        flat 30-day approximation rather than tracking calendar months.
         """
-        if self.frequency == "daily":
+        if self.frequency_unit == "day":
             next_due = date.today() + timedelta(days=1)
-        elif self.frequency == "weekly":
+        elif self.frequency_unit == "week":
             next_due = date.today() + timedelta(weeks=1)
+        elif self.frequency_unit == "month":
+            next_due = date.today() + timedelta(days=30)
         else:
             return None
         return Task(
@@ -62,7 +94,8 @@ class Task:
             duration_minutes=self.duration_minutes,
             priority=self.priority,
             description=self.description,
-            frequency=self.frequency,
+            frequency_count=self.frequency_count,
+            frequency_unit=self.frequency_unit,
             due_date=str(next_due),
             pet_name=self.pet_name,
         )
@@ -72,16 +105,19 @@ class Task:
 class Pet:
     pet_name: str
     species: str
+    notes: str = ""
     tasks: list[Task] = field(default_factory=list)
 
     def add_task(self, title: str, duration_minutes: int, priority: str,
-                 description: str = "", frequency: str = "daily",
+                 description: str = "", frequency_count: int = 1,
+                 frequency_unit: str = "day",
                  start_time: str | None = None) -> Task | None:
         """Create and append a Task. Returns None if a task with that title already exists.
         Pass start_time='HH:MM' to pin the task to a fixed slot; assign_times() will skip it."""
         if any(t.title == title for t in self.tasks):
             return None
-        task = Task(title, duration_minutes, priority, description, frequency,
+        task = Task(title, duration_minutes, priority, description,
+                    frequency_count, frequency_unit,
                     start_time=start_time, pet_name=self.pet_name)
         self.tasks.append(task)
         return task
@@ -103,6 +139,45 @@ class Pet:
         if next_task:
             self.tasks.append(next_task)
         return next_task
+
+    def edit_task(self, title: str, *, new_title: Any = _UNSET, duration_minutes: Any = _UNSET,
+                  priority: Any = _UNSET, description: Any = _UNSET, frequency_count: Any = _UNSET,
+                  frequency_unit: Any = _UNSET, start_time: Any = _UNSET) -> Task | None:
+        """
+        Update fields on an existing task in place. Any field left as _UNSET
+        (the default) is left unchanged. Pass start_time=None explicitly to
+        unpin a fixed time. Returns the updated Task, or None if not found.
+        Rename is rejected (returns None, task left unmodified) if new_title
+        collides with another existing task's title.
+        """
+        task = next((t for t in self.tasks if t.title == title), None)
+        if task is None:
+            return None
+        if new_title is not _UNSET and new_title != title:
+            if any(t.title == new_title for t in self.tasks):
+                return None
+            task.title = new_title
+        if duration_minutes is not _UNSET:
+            task.duration_minutes = duration_minutes
+        if priority is not _UNSET:
+            task.priority = priority
+        if description is not _UNSET:
+            task.description = description
+        if frequency_count is not _UNSET:
+            task.frequency_count = frequency_count
+        if frequency_unit is not _UNSET:
+            task.frequency_unit = frequency_unit
+        if start_time is not _UNSET:
+            task.start_time = start_time
+        return task
+
+    def delete_task(self, title: str) -> bool:
+        """Remove a task by title. Returns True if found and removed, False otherwise."""
+        for i, t in enumerate(self.tasks):
+            if t.title == title:
+                self.tasks.pop(i)
+                return True
+        return False
 
 
 class Owner:
@@ -127,6 +202,30 @@ class Owner:
                 return True
         return False
 
+    def edit_pet(self, pet_name: str, *, new_name: str | None = None,
+                 species: str | None = None, notes: str | None = None) -> Pet | None:
+        """
+        Update an existing pet's name/species/notes in place. None means
+        "leave unchanged" for each param (pass notes="" to clear notes text).
+        Returns the updated Pet, or None if not found. Rename is rejected
+        (returns None, pet left unmodified) if new_name collides with another
+        existing pet.
+        """
+        pet = next((p for p in self.pets if p.pet_name == pet_name), None)
+        if pet is None:
+            return None
+        if new_name is not None and new_name != pet_name:
+            if any(p.pet_name == new_name for p in self.pets):
+                return None
+            pet.pet_name = new_name
+            for t in pet.tasks:
+                t.pet_name = new_name  # keep Task.pet_name in sync — read by Scheduler.detect_conflicts and app.py
+        if species is not None:
+            pet.species = species
+        if notes is not None:
+            pet.notes = notes
+        return pet
+
     def get_pets(self) -> list[Pet]:
         return self.pets
 
@@ -149,15 +248,21 @@ class Scheduler:
         self.day_start = day_start
         self.day_end = day_end
 
-    def filter_recurring(self, day_of_week: int = 0) -> list[Task]:
+    def filter_recurring(self, day_of_week: int = 0, day_of_month: int = 1) -> list[Task]:
         """
-        Return the subset of tasks that should run on the given weekday.
+        Return the subset of tasks that should run on the given day.
 
         day_of_week follows Python's weekday() convention: 0 = Monday, 6 = Sunday.
+        day_of_month is a 1-based day-of-period index used for "month" tasks.
 
-        - ``daily``     tasks are always included regardless of the day.
-        - ``weekly``    tasks are included only on Monday (day_of_week == 0),
-                        so they appear exactly once per week.
+        - ``day``       tasks are always included regardless of the day; same-day
+                        multiplicity (frequency_count > 1) is expanded later, in
+                        assign_times(), not here.
+        - ``week``      tasks are included only on the frequency_count evenly-spaced
+                        weekdays picked by _active_days(7, frequency_count).
+        - ``month``     tasks are included only on the frequency_count evenly-spaced
+                        days picked by _active_days(30, frequency_count) — a flat
+                        30-day approximation, not a real calendar month.
         - ``as_needed`` tasks are excluded entirely; they are meant to be
                         scheduled manually when the owner decides they are needed.
 
@@ -166,11 +271,40 @@ class Scheduler:
         """
         result = []
         for t in self.tasks:
-            if t.frequency == "daily":
+            if t.frequency_unit == "day":
                 result.append(t)
-            elif t.frequency == "weekly" and day_of_week == 0:
-                result.append(t)
+            elif t.frequency_unit == "week":
+                if day_of_week in _active_days(7, t.frequency_count):
+                    result.append(t)
+            elif t.frequency_unit == "month":
+                if (day_of_month - 1) in _active_days(30, t.frequency_count):
+                    result.append(t)
         return result
+
+    def _expand_daily_multiplicity(self) -> None:
+        """
+        Replace self.tasks with an expanded list: any pending task with
+        frequency_unit == "day" and frequency_count > 1 is split into N
+        independent, ephemeral copies (via dataclasses.replace) — never
+        written back to Pet.tasks, only used within this Scheduler run.
+        If the original task had a pinned start_time, occurrence 1 keeps it
+        (stays an anchor) and occurrences 2..N float, so assign_times() finds
+        them their own slots. Each copy gets frequency_count=1 so re-running
+        this method (e.g. via a second .schedule() call) is a no-op.
+        """
+        expanded: list[Task] = []
+        for t in self.tasks:
+            if t.frequency_unit == "day" and t.frequency_count > 1 and t.completion_status == "pending":
+                for i in range(1, t.frequency_count + 1):
+                    expanded.append(replace(
+                        t,
+                        title=f"{t.title} ({i}/{t.frequency_count})",
+                        start_time=t.start_time if i == 1 else None,
+                        frequency_count=1,
+                    ))
+            else:
+                expanded.append(t)
+        self.tasks = expanded
 
     def assign_times(self) -> list[Task]:
         """
@@ -179,6 +313,7 @@ class Scheduler:
         first window where it fits, so gaps before anchors are used before spilling
         past them. Tasks that fit nowhere are placed sequentially after day_end.
         """
+        self._expand_daily_multiplicity()
         pending = [t for t in self.tasks if t.completion_status == "pending"]
 
         anchors: list[Task] = sorted(
@@ -289,7 +424,16 @@ class Scheduler:
            This distinction helps the owner see whether they need to reschedule
            one pet's activity or coordinate between two pets at the same time.
 
-        2. **Budget overflow** — total pending task duration exceeds the
+        2. **Out-of-window scheduling** — a task's interval falls partly or
+           fully outside ``[day_start, day_end]``. This can happen to a
+           manually pinned anchor task (e.g. fixed at 21:00 when the day ends
+           at 21:00, so it runs 20 min past close), or to a floating task
+           pushed past ``day_end`` when there's no room left elsewhere (see
+           ``assign_times()``'s overflow handling). Reported per-task, naming
+           which boundary was missed, so the owner knows whether to change
+           that task's fixed time or move the day's start/end instead.
+
+        3. **Budget overflow** — total pending task duration exceeds the
            ``day_end - day_start`` window.  Reported as a single summary line
            so the owner knows the day is over-committed even if no two tasks
            happen to overlap after auto-scheduling.
@@ -317,9 +461,25 @@ class Scheduler:
                         label = f"'{a.title}' ({a.start_time}) overlaps '{b.title}' ({b.start_time})"
                     messages.append(f"WARNING {kind} {label}")
 
+        day_start_min = _parse_hhmm(self.day_start)
+        day_end_min = _parse_hhmm(self.day_end)
+        for t in timed:
+            t_start = _parse_hhmm(t.start_time or "00:00")
+            t_end = t_start + t.duration_minutes
+            if t_start < day_start_min:
+                messages.append(
+                    f"WARNING [OUT OF WINDOW] '{t.title}' ({t.start_time}) starts before the day "
+                    f"begins at {self.day_start} — change its fixed time or move the day's start earlier."
+                )
+            elif t_end > day_end_min:
+                messages.append(
+                    f"WARNING [OUT OF WINDOW] '{t.title}' ({t.start_time}, ends {_format_hhmm(t_end)}) "
+                    f"runs past the day's end at {self.day_end} — change its fixed time or move the day's end later."
+                )
+
         pending = [t for t in self.tasks if t.completion_status == "pending"]
         total = sum(t.duration_minutes for t in pending)
-        available = _parse_hhmm(self.day_end) - _parse_hhmm(self.day_start)
+        available = day_end_min - day_start_min
         if total > available:
             messages.append(
                 f"Total tasks ({total} min) exceed the {available}-min window by {total - available} min"
@@ -347,7 +507,7 @@ class Scheduler:
         for t in result.tasks:
             lines.append(
                 f"  {t.start_time} | [{t.priority.upper():6}] "
-                f"{t.title:<20} {t.duration_minutes} min  |  {t.frequency}"
+                f"{t.title:<20} {t.duration_minutes} min  |  {t.frequency_label()}"
             )
 
         if result.conflicts:
@@ -372,7 +532,11 @@ def save_owner(owner: Owner, path: str = "pawpal_save.json") -> None:
 
 
 def load_owner(path: str = "pawpal_save.json") -> Owner | None:
-    """Load an Owner from a JSON file. Returns None if the file doesn't exist."""
+    """
+    Load an Owner from a JSON file. Returns None if the file doesn't exist.
+    Migrates legacy saves (a "frequency": "daily"/"weekly"/"as_needed" string,
+    no "notes" on pets) into the current frequency_count/frequency_unit schema.
+    """
     p = Path(path)
     if not p.exists():
         return None
@@ -380,6 +544,12 @@ def load_owner(path: str = "pawpal_save.json") -> Owner | None:
     owner = Owner(data["owner_name"])
     for pet_data in data["pets"]:
         pet = owner.add_pet(pet_data["pet_name"], pet_data["species"])
+        pet.notes = pet_data.get("notes", "")
         for t in pet_data["tasks"]:
+            t = dict(t)  # copy — don't mutate the parsed JSON in place
+            if "frequency" in t:
+                count, unit = _LEGACY_FREQUENCY_MAP.get(t.pop("frequency"), (1, "day"))
+                t.setdefault("frequency_count", count)
+                t.setdefault("frequency_unit", unit)
             pet.tasks.append(Task(**t))
     return owner
