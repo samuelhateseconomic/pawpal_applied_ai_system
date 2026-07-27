@@ -144,6 +144,17 @@ class TestScheduleTasks:
         result = scheduler.schedule()
         assert any("Walk" in c and "Bath" in c for c in result.conflicts)
 
+    def test_happy_different_pets_same_time_not_a_conflict(self):
+        # Two pets doing an activity together (e.g. a joint walk) is allowed
+        # on purpose — only the same pet double-booked should be flagged.
+        tasks = [
+            Task("Walk", 30, "high", start_time="09:00", pet_name="Buddy"),
+            Task("Walk", 30, "high", start_time="09:00", pet_name="Whiskers"),
+        ]
+        scheduler = Scheduler(tasks)
+        result = scheduler.schedule()
+        assert result.conflicts == []
+
     def test_edge_overflow_reported_when_tasks_exceed_window(self):
         tasks = [Task(f"Task{i}", 120, "low") for i in range(6)]
         scheduler = Scheduler(tasks, day_start="09:00", day_end="10:00")

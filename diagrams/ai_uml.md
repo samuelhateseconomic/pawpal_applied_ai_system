@@ -4,6 +4,10 @@ This document outlines the design, tool integration layer, and decision flow for
 
 ---
 
+## 0. System Overview
+
+PawPal+ doesn't use a document retriever (no RAG), so the "retriever" role is filled by the **Tool Layer**, which fetches/executes deterministic ground truth from the pet-scheduling engine instead of an LLM guess. The **evaluator** role is filled by the **Guardrail + Conflict Detector**, which checks the agent's requested action against required-parameter rules and scheduling conflicts before anything is treated as final. The **tester** role is split between the automated **pytest suite** (`tests/`) and the **human user**, who reviews every natural-language response before trusting or acting on it.
+
 ## 1. High-Level Architecture Diagram
 
 ```mermaid

@@ -1,59 +1,163 @@
-# PawPal+ (Final AI Project)
+# PawPal+ 2.0 (Final AI Project)
 
-I am going to implement AI into the final version of Pawpal+ that I made in module two.
+An AI-powered pet care assistant that lets an owner manage pets, tasks, and daily schedules through a chat interface instead of clicking through forms. A single Gemini agent parses natural-language requests, calls deterministic Python tools to make the actual changes, and reports back — including flagging schedule conflicts — in plain language.
 
-## AI Implementation:
-1. I want to add an AI Agent that will completely help user to control the pet database as checking, planning, adjust, or give a recommendation. It will be presented as a chat box that user could give it a command, then it will break the user command into tokens, then defined the tasks, then plan what it needs to do, then execute.
+It matters because scheduling for multiple pets (feeding times, walks, meds, vet visits) is a constraint-juggling problem that's tedious to do by hand but easy to get wrong silently; PawPal+ automates the juggling while keeping a human in the loop for anything ambiguous or conflicting, rather than letting the AI silently guess.
 
-## Limitations:
-1. App has no memory so after I add the owner and pet, I have no way to comeback and adjust it. 
-2. The website needs to contain the pages that support multiple purposes and button to direct between pages.
+---
 
-## Plan:
-1. Create local database - one owner
-2. Create different dashboard:
-    a. To control Pet:
-        i. Add the owner name, and pet, species, notes - so that if two pets can have the same activites and want a friend, they can go together.
-        ii.Modify(even rename, edit-species, delete) the owner name, and pet, or species
-            1. If delete, all the tasks related to the pet will be also deleted so make a Notice to the user.
-    b. To control the Task:
-        i.Add the task to the existed pet, included task name, duration, occurance (once a day, twice a day, three times a week) - give them choice to input the number of occurance and the options for day, week and month. For example, they can input 1 or 2 or 10 by themself, but they need to choose day, week or month. 
-        ii.Add the note to the task, so that they can control and AI can look at the generate the schedule base on the foundation requirements and extra note.
-    c. To control the Schedule - WILL TRY NOT FORCES
-        i. Make it looks like google calendar go by week as user can track the pets tasks
-        ii.
-3. Add the function to adjust the tasks in control pet, control task and control schedule dashboard
+## Architecture Overview
 
-## Action:
-1. Extend the data model (foundation, no AI yet)
-    a. Add notes field to Pet
-    b. Add edit_pet (rename/species) and delete_task / edit_task methods — these don't exist at all yet
-    c. Redesign frequency from the fixed "daily"/"weekly"/"as_needed" enum into frequency_count + frequency_unit (day/week/month) so "2x a day" is expressible
-    d. Write pytest tests for each new method as you go, matching the existing TestAddPets-style class grouping
-2. Build the "tool layer" for the agent
-    a. Before touching any LLM code, wrap every model method (add_pet, edit_task, remove_pet, etc.) as a clean, well-documented function — these become the literal tool definitions the agent calls. Test them directly with plain function calls first, no AI involved.
-3. Wire the AI agent (Claude API, tool-use)
-    Take a user command string → let Claude pick a tool + arguments from Phase 3's set → execute → return a result. Build and test this as a standalone script (like main.py) before it touches Streamlit at all — much faster to debug.
-4. Chat UI in Streamlit
-    Add a chat box page that calls the Phase 4 agent and displays what it did (which tool ran, what changed).
-5. Multi-page dashboards + week calendar view
-    Last, because the calendar view is the biggest scheduler rewrite and dashboards are just UI wrapping around what already works by then
-## 🖥️ Sample Output
+PawPal+ uses a **single-agent, function-calling pattern**: the LLM (Gemini) only handles intent parsing and conversation — every actual state change (adding a pet, scheduling a task, detecting a conflict) runs through deterministic Python functions in `pawpal_system.py`, wrapped as tools in `agent_tools.py`. This keeps the AI from ever inventing data or silently resolving a scheduling conflict on its own.
 
-## 🧪 Testing PawPal+
+```mermaid
+flowchart LR
+    subgraph IN["Input"]
+        U["User\n(natural language request)"]
+    end
 
+    subgraph PROCESS["Process"]
+        A["Agent\nGemini — intent parsing,\ndecides which tool to call"]
+        G{"Evaluator (Guardrail)\nRequired params present?\nNo state assumed/invented"}
+        R["Tool Layer / Retriever\nagent_tools.py — executes\ndeterministic functions"]
+        C["Evaluator (Conflict Detector)\npawpal_system.py Scheduler —\nchecks time overlaps & budget"]
+    end
 
-## 💾 Persistence — Save Workflow
+    subgraph OUT["Output"]
+        O["Agent Response\nfriendly natural-language reply\n+ persisted state (pawpal_save.json)"]
+    end
 
-PawPal+ automatically saves state to a local JSON file (`pawpal_save.json`) so an owner's pets and tasks survive a page reload or app restart.
+    subgraph CHECK["Human & Automated Testing"]
+        H["Human (User)\nreads reply, confirms or\ncorrects the AI's result"]
+        T["Tester\npytest suite (tests/)\nvalidates tools & scheduler\nbefore any release"]
+    end
 
-**How it works:**
+    U --> A
+    A --> G
+    G -- "missing info" --> U
+    G -- "complete" --> R
+    R --> C
+    C -- "status + conflict warnings" --> R
+    R --> A
+    A --> O
+    O --> H
+    H -- "clarifies / corrects" --> U
+    T -. "verifies correctness of" .-> R
+    T -. "verifies correctness of" .-> C
+```
 
-1. **On startup**, `app.py` checks if `owner` is already in `st.session_state`. If not, it calls `load_owner()`, which reads `pawpal_save.json` and rebuilds the `Owner` → `Pet` → `Task` objects. If the file doesn't exist yet (first run), `load_owner()` returns `None` and the app starts fresh.
-2. **On every mutation** — clicking "Set Owner & Pet" or "Add task" — `app.py` calls `save_owner(st.session_state.owner)` right after the change. `save_owner()` converts the whole object tree to a dict with `dataclasses.asdict()` and writes it to `pawpal_save.json` with `json.dumps(..., indent=2)`.
-3. Both functions use only the Python standard library (`json`, `pathlib`) — no new dependencies.
+PawPal+ has no document retriever (it isn't a RAG system), so that role is filled by the **Tool Layer**, which fetches/executes deterministic ground truth from the scheduling engine instead of an LLM guess. The **evaluator** role is split into the **Guardrail** (blocks the agent from calling a tool with missing required parameters) and the **Conflict Detector** (checks the resulting schedule for time overlaps). The **tester** role is split between the automated **pytest suite** and the **human user**, who reviews every reply before trusting it.
 
+Full detailed diagrams (component, sequence, tool-mapping matrix, guardrail spec) live in [diagrams/ai_uml.md](diagrams/ai_uml.md).
 
-## 🧪 Testing PawPal+
+---
 
-## 📸 Demo Walkthrough
+## Setup Instructions
+
+1. **Clone/open the project** and move into the project folder:
+   ```bash
+   cd applied-ai-system-final
+   ```
+
+2. **Create and activate a virtual environment** (already present as `.venv/` — recreate if needed):
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate      # Windows
+   source .venv/bin/activate   # macOS/Linux
+   ```
+
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Add your Gemini API key** to a `.env` file in the project root:
+   ```
+   GEMINI_API_KEY=your_key_here
+   ```
+
+5. **Run the app:**
+   ```bash
+   streamlit run app.py
+   ```
+   This opens the chat UI plus the Pets / Tasks / Schedule dashboards. Data persists automatically to `pawpal_save.json` between sessions.
+
+6. **Optional — run the non-AI scheduler demo** (no API key needed):
+   ```bash
+   python main.py
+   ```
+
+7. **Run the test suite:**
+   ```bash
+   pytest
+   ```
+
+---
+
+## Sample Interactions
+
+### 1st Sample - Initialize a Pet
+User: 
+   Hi, can you help me to add a pet name Lili, she is a crocodile and she likes to eat steak.
+Output: 
+   OK! I've added Lili the crocodile to your pets. I noted that she likes to eat steak.
+Task ran: 
+   ran add_pet(species='crocodile', notes='likes to eat steak', pet_name='Lili')
+   ↳ {'result': {'status': 'created', 'pet': {'pet_name': 'Lili', 'species': 'crocodile', 'notes': 'likes to eat steak', 'tasks': []}}}
+
+### 2nd Sample - Add a tasks
+User: 
+   can you add an activity "Daily feeding" for Lili, around 12pm everyday
+Output: 
+   I've added the "Daily feeding" task for Lili at 12:00 PM. I've checked the schedule, and there are no conflicts.
+Task ran:
+   ↳ {'result': {'status': 'created', 'pet': {'pet_name': 'Lili', 'species': 'crocodile', 'notes': 'likes to eat steak', 'tasks': []}}}
+
+   🔧 ran add_task(description='Feeding time', priority='high', frequency_unit='day', pet_name='Lili', title='Daily feeding', start_time='12:00', frequency_count=1, duration_minutes=30)
+
+   ↳ {'result': {'status': 'created', 'task': {'title': 'Daily feeding', 'duration_minutes': 30, 'priority': 'high', 'description': 'Feeding time', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '12:00', 'due_date': None, 'pet_name': 'Lili'}}}
+
+   🔧 ran generate_schedule(pet_name='Lili')
+
+   ↳ {'result': {'status': 'ok', 'tasks': [{'title': 'Daily feeding', 'duration_minutes': 30, 'priority': 'high', 'description': 'Feeding time', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '12:00', 'due_date': None, 'pet_name': 'Lili'}], 'conflicts': []}}
+### 3rd Sample - Generate a Schedule
+User: 
+   help me to generate a schedule today for Lili
+Output: 
+   The schedule for Lili has been generated successfully. Here is her task for today:
+
+   12:00: Daily feeding (High priority)
+   There are no conflicts in her schedule.
+Task ran:
+   🔧 ran generate_schedule()
+
+   ↳ {'result': {'status': 'ok', 'tasks': [{'title': 'morning walking', 'duration_minutes': 20, 'priority': 'high', 'description': '', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '09:00', 'due_date': None, 'pet_name': 'Mochi'}, {'title': 'morning walking', 'duration_minutes': 20, 'priority': 'high', 'description': '', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '09:00', 'due_date': None, 'pet_name': 'Moch'}, {'title': 'morning walk', 'duration_minutes': 5, 'priority': 'low', 'description': '', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '09:30', 'due_date': None, 'pet_name': 'Sarala'}, {'title': 'Daily feeding', 'duration_minutes': 30, 'priority': 'high', 'description': 'Feeding time', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '12:00', 'due_date': None, 'pet_name': 'Lili'}], 'conflicts': []}}
+
+   🔧 ran generate_schedule(pet_name='Lili')
+
+   ↳ {'result': {'status': 'ok', 'tasks': [{'title': 'Daily feeding', 'duration_minutes': 30, 'priority': 'high', 'description': 'Feeding time', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '12:00', 'due_date': None, 'pet_name': 'Lili'}], 'conflicts': []}}
+### 4th Sample - Delete a Pet
+User: 
+---
+
+## Design Decisions
+
+*(left intentionally empty — to be filled in)*
+
+---
+
+## Testing Summary
+
+**What was tested:** the full tool layer (`agent_tools.py`) and the underlying scheduling engine (`pawpal_system.py`), covering both happy paths and edge cases — duplicate names, missing pets/tasks, name/title collisions, and schedule conflicts — via the pytest suite in `tests/` (`test_agent_tools.py`, `test_pawpal.py`, `test_views.py`).
+
+**What worked:** the core CRUD operations (add/edit/delete pets and tasks) and the window-filling scheduler - anchored (fixed-time) tasks correctliest window they fit in by priority, then duration.
+
+**What didn't work initially:** the first scheduler used a single moving cursor that jumped past anchor tasks without looking back, wasting open gaps before an anchor (e.g. a 09:00–10:00 window before a 10:00 vet visit). This was replaced with a window-filling algorithm that tracks a separate fill cursor per time window.
+
+**What was learned:** AI-suggested fixes need to be read and verified line-by-line, e.g. one AI suggestion attempted to fix the scheduler in a way that would have stripped the user's ability to set their own fixed times, which would have silently removed a feature rather than fixed the bug. Testing tool functions directly (no LLM involved) before ever wiring up the agent made bugs much faster to isolate, since a failure could only be in the deterministic code, not in LLM behavior.
+
+---
+
+## Reflection
+
+*(see [reflection.md](reflection.md) for the full design/testing/AI-collaboration writeup)*

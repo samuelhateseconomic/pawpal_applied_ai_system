@@ -415,14 +415,12 @@ class Scheduler:
 
         Two types of conflicts are checked:
 
-        1. **Time overlap** — any two tasks whose intervals intersect.
-           Overlap is detected with the standard interval test:
-           ``a_start < b_end and b_start < a_end``.
-           Each warning is labelled either:
-           - ``[SAME PET: <name>]``  when both tasks belong to the same pet, or
-           - ``[CROSS PET: <A> / <B>]`` when they belong to different pets.
-           This distinction helps the owner see whether they need to reschedule
-           one pet's activity or coordinate between two pets at the same time.
+        1. **Time overlap** — two tasks *for the same pet* whose intervals
+           intersect. Overlap is detected with the standard interval test:
+           ``a_start < b_end and b_start < a_end``. Labelled ``[SAME PET: <name>]``.
+           Two different pets overlapping is intentionally allowed — e.g. two
+           dogs going for a walk together — so cross-pet overlaps are not
+           reported as conflicts at all.
 
         2. **Out-of-window scheduling** — a task's interval falls partly or
            fully outside ``[day_start, day_end]``. This can happen to a
@@ -450,15 +448,11 @@ class Scheduler:
             for b in timed[i + 1:]:
                 b_start = _parse_hhmm(b.start_time)
                 b_end = b_start + b.duration_minutes
-                if a_start < b_end and b_start < a_end:
-                    if a.pet_name and b.pet_name and a.pet_name == b.pet_name:
-                        kind = f"[SAME PET: {a.pet_name}]"
-                        label = f"'{a.title}' ({a.start_time}) overlaps '{b.title}' ({b.start_time})"
-                    else:
-                        pa = a.pet_name or "unknown"
-                        pb = b.pet_name or "unknown"
-                        kind = f"[CROSS PET: {pa} / {pb}]"
-                        label = f"'{a.title}' ({a.start_time}) overlaps '{b.title}' ({b.start_time})"
+                # Two different pets overlapping is allowed on purpose — e.g. two dogs
+                # going for a walk together — so only the same pet double-booked counts.
+                if a_start < b_end and b_start < a_end and a.pet_name and a.pet_name == b.pet_name:
+                    kind = f"[SAME PET: {a.pet_name}]"
+                    label = f"'{a.title}' ({a.start_time}) overlaps '{b.title}' ({b.start_time})"
                     messages.append(f"WARNING {kind} {label}")
 
         day_start_min = _parse_hhmm(self.day_start)
