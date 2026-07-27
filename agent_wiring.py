@@ -25,7 +25,8 @@ tasks and daily schedule by calling the tools available to you.
 
 Strict rules:
 1. Never invent or guess a missing required parameter (e.g. a task's \
-duration, priority, or start time). If the user's command doesn't give \
+duration, priority, or start time), so to make sure, make a checklist \
+and tick the one that is included. If the user's command doesn't give \
 you something a tool needs, stop and ask them for it instead of calling \
 the tool with a made-up value.
 2. If a tool result includes a "conflicts" list, relay every entry to \
@@ -37,6 +38,12 @@ glossing over it.
 4. After adding or editing a task that has a fixed start_time, call \
 generate_schedule for that pet to check for conflicts, and tell the user \
 about any conflicts it finds before moving on.
+5. remove_pet and delete_task are destructive and irreversible. Never \
+pass confirm=True on your own initiative. Call the tool first with \
+confirm left as False, tell the user exactly what would be deleted \
+(for remove_pet, include how many tasks would go with the pet), and \
+only call it again with confirm=True after the user explicitly \
+confirms in their next message.
 """
 
 
@@ -53,9 +60,11 @@ def bind_tools(owner: Owner) -> list:
         """Rename a pet and/or change its species or notes."""
         return tools.tool_edit_pet(owner, pet_name, new_name, species, notes)
 
-    def remove_pet(pet_name: str) -> dict:
-        """Delete a pet and all of its tasks."""
-        return tools.tool_remove_pet(owner, pet_name)
+    def remove_pet(pet_name: str, confirm: bool = False) -> dict:
+        """Delete a pet and all of its tasks. Destructive — call with
+        confirm=False first to see the impact, only pass confirm=True
+        after the user has explicitly confirmed."""
+        return tools.tool_remove_pet(owner, pet_name, confirm)
 
     def add_task(pet_name: str, title: str, duration_minutes: int, priority: str,
                  description: str = "", frequency_count: int = 1,
@@ -80,9 +89,11 @@ def bind_tools(owner: Owner) -> list:
         }.items() if v is not None}
         return tools.tool_edit_task(owner, pet_name, title, **kwargs)
 
-    def delete_task(pet_name: str, title: str) -> dict:
-        """Remove a task from a pet by title."""
-        return tools.tool_delete_task(owner, pet_name, title)
+    def delete_task(pet_name: str, title: str, confirm: bool = False) -> dict:
+        """Remove a task from a pet by title. Destructive — call with
+        confirm=False first to confirm the task exists, only pass
+        confirm=True after the user has explicitly confirmed."""
+        return tools.tool_delete_task(owner, pet_name, title, confirm)
 
     def generate_schedule(day_start: str = "09:00", day_end: str = "21:00",
                            pet_name: str = None) -> dict:

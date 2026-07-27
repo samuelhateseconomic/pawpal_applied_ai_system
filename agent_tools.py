@@ -60,18 +60,26 @@ def tool_edit_pet(owner: Owner, pet_name: str, new_name: str | None = None,
     return {"status": "updated", "pet": asdict(updated)}
 
 
-def tool_remove_pet(owner: Owner, pet_name: str) -> dict:
+def tool_remove_pet(owner: Owner, pet_name: str, confirm: bool = False) -> dict:
     """
-    Delete a pet and every task belonging to it.
+    Delete a pet and every task belonging to it. Destructive and
+    irreversible — nothing is deleted unless confirm=True.
 
-    Returns {"status": "removed", "deleted_task_count": N} so the agent
-    can tell the user how many tasks were deleted along with the pet,
-    or {"status": "not_found"}.
+    Call this first with confirm left as False: it deletes nothing and
+    instead reports how many tasks would be deleted with the pet, so
+    the agent can show the user the impact and get their explicit
+    yes/confirmation before calling again with confirm=True.
+
+    Returns {"status": "confirm_required", "deleted_task_count": N} (no
+    change made), {"status": "removed", "deleted_task_count": N} once
+    confirmed, or {"status": "not_found"}.
     """
     pet = _find_pet(owner, pet_name)
     if pet is None:
         return {"status": "not_found", "pet_name": pet_name}
     deleted_task_count = len(pet.tasks)
+    if not confirm:
+        return {"status": "confirm_required", "pet_name": pet_name, "deleted_task_count": deleted_task_count}
     owner.remove_pet(pet_name)
     save_owner(owner)
     return {"status": "removed", "pet_name": pet_name, "deleted_task_count": deleted_task_count}
@@ -138,18 +146,27 @@ def tool_edit_task(owner: Owner, pet_name: str, title: str, *,
     return {"status": "updated", "task": asdict(task)}
 
 
-def tool_delete_task(owner: Owner, pet_name: str, title: str) -> dict:
+def tool_delete_task(owner: Owner, pet_name: str, title: str, confirm: bool = False) -> dict:
     """
-    Remove a task by title.
+    Remove a task by title. Destructive and irreversible — nothing is
+    deleted unless confirm=True.
 
-    Returns {"status": "deleted"}, {"status": "task_not_found"},
+    Call this first with confirm left as False: it deletes nothing and
+    just confirms the task exists, so the agent can ask the user to
+    confirm before calling again with confirm=True.
+
+    Returns {"status": "confirm_required"} (no change made),
+    {"status": "deleted"} once confirmed, {"status": "task_not_found"},
     or {"status": "pet_not_found"}.
     """
     pet = _find_pet(owner, pet_name)
     if pet is None:
         return {"status": "pet_not_found", "pet_name": pet_name}
-    if not pet.delete_task(title):
+    if not any(t.title == title for t in pet.tasks):
         return {"status": "task_not_found", "title": title}
+    if not confirm:
+        return {"status": "confirm_required", "pet_name": pet_name, "title": title}
+    pet.delete_task(title)
     save_owner(owner)
     return {"status": "deleted", "pet_name": pet_name, "title": title}
 

@@ -75,8 +75,13 @@ class TestToolEditPet:
 # ── 3. tool_remove_pet ───────────────────────────────────────────────────────
 
 class TestToolRemovePet:
-    def test_happy_removes_pet_and_reports_task_count(self, pet_with_task):
+    def test_edge_requires_confirmation_by_default(self, pet_with_task):
         result = tool_remove_pet(pet_with_task, "Buddy")
+        assert result == {"status": "confirm_required", "pet_name": "Buddy", "deleted_task_count": 1}
+        assert pet_with_task.get_pets() != []  # nothing deleted yet
+
+    def test_happy_removes_pet_and_reports_task_count_once_confirmed(self, pet_with_task):
+        result = tool_remove_pet(pet_with_task, "Buddy", confirm=True)
         assert result == {"status": "removed", "pet_name": "Buddy", "deleted_task_count": 1}
         assert pet_with_task.get_pets() == []
 
@@ -139,8 +144,13 @@ class TestToolEditTask:
 # ── 6. tool_delete_task ──────────────────────────────────────────────────────
 
 class TestToolDeleteTask:
-    def test_happy_deletes_task(self, pet_with_task):
+    def test_edge_requires_confirmation_by_default(self, pet_with_task):
         result = tool_delete_task(pet_with_task, "Buddy", "Morning Walk")
+        assert result == {"status": "confirm_required", "pet_name": "Buddy", "title": "Morning Walk"}
+        assert pet_with_task.get_all_tasks() != []  # nothing deleted yet
+
+    def test_happy_deletes_task_once_confirmed(self, pet_with_task):
+        result = tool_delete_task(pet_with_task, "Buddy", "Morning Walk", confirm=True)
         assert result == {"status": "deleted", "pet_name": "Buddy", "title": "Morning Walk"}
         assert pet_with_task.get_all_tasks() == []
 
