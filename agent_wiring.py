@@ -129,6 +129,17 @@ class Agent:
             return self._chat.send_message(message)
 
 
+def build_agent(client: genai.Client, owner: Owner) -> Agent:
+    """Construct an Agent wired to this owner's tools and guardrail
+    system instruction — shared by the CLI loop below and the Streamlit
+    chat UI in app.py."""
+    config = types.GenerateContentConfig(
+        system_instruction=SYSTEM_INSTRUCTION,
+        tools=bind_tools(owner),
+    )
+    return Agent(client, config)
+
+
 def run_command(agent: Agent, command: str) -> None:
     resp = agent.ask(command)
     history = resp.automatic_function_calling_history or []
@@ -154,11 +165,7 @@ def main() -> None:
         save_owner(owner)
 
     client = genai.Client(api_key=api_key)
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
-        tools=bind_tools(owner),
-    )
-    agent = Agent(client, config)
+    agent = build_agent(client, owner)
 
     print(f"PawPal+ agent ready for {owner.owner_name}. Type 'quit' to exit.\n")
     while True:

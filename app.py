@@ -1,9 +1,16 @@
+import os
 from datetime import time
 
 import streamlit as st
+from dotenv import load_dotenv
+from google import genai
+from google.genai import errors
+
 from pawpal_system import Owner, Scheduler, save_owner, load_owner
+from agent_wiring import build_agent
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
+load_dotenv()
 
 # ── Load persisted data once per session ──────────────────────────────────────
 if "owner" not in st.session_state:
@@ -13,6 +20,53 @@ if "owner" not in st.session_state:
 
 st.title("🐾 PawPal+")
 st.markdown("Plan your pet's day — add a pet, add tasks, and generate a schedule.")
+st.divider()
+
+# ── AI Assistant ───────────────────────────────────────────────────────────────
+
+st.subheader("🐾 AI Assistant")
+
+if "owner" not in st.session_state:
+    st.info("Set an owner and pet below, then come back here to chat.")
+elif not os.environ.get("GEMINI_API_KEY"):
+    st.warning("GEMINI_API_KEY not set — add it to .env to enable the chat assistant.")
+else:
+    # Rebuild the agent whenever the owner object itself is swapped out
+    # (e.g. the "Set Owner & Pet" button below creates a new Owner) so
+    # the agent's tools never operate on a stale owner.
+    if st.session_state.get("agent_owner_id") != id(st.session_state.owner):
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        st.session_state.agent = build_agent(client, st.session_state.owner)
+        st.session_state.agent_owner_id = id(st.session_state.owner)
+        st.session_state.chat_transcript = []
+
+    for role, text, tool_log in st.session_state.chat_transcript:
+        with st.chat_message(role):
+            for line in tool_log or []:
+                st.caption(line)
+            st.write(text)
+
+    command = st.chat_input("Tell PawPal+ what to do...")
+    if command:
+        st.session_state.chat_transcript.append(("user", command, None))
+        with st.spinner("Thinking..."):
+            try:
+                resp = st.session_state.agent.ask(command)
+            except errors.ClientError as e:
+                reply_text, tool_log = f"Sorry, the AI service returned an error: {e}", []
+            else:
+                tool_log = []
+                for content in resp.automatic_function_calling_history or []:
+                    for part in content.parts or []:
+                        if part.function_call:
+                            args = ", ".join(f"{k}={v!r}" for k, v in dict(part.function_call.args or {}).items())
+                            tool_log.append(f"🔧 ran `{part.function_call.name}({args})`")
+                        elif part.function_response:
+                            tool_log.append(f"↳ {part.function_response.response}")
+                reply_text = resp.text
+        st.session_state.chat_transcript.append(("assistant", reply_text, tool_log))
+        st.rerun()
+
 st.divider()
 
 # ── Owner & Pet Setup ─────────────────────────────────────────────────────────

@@ -38,3 +38,22 @@ I am going to implement AI into the final version of Pawpal+ that I made in modu
     Add a chat box page that calls the Phase 4 agent and displays what it did (which tool ran, what changed).
 5. Multi-page dashboards + week calendar view
     Last, because the calendar view is the biggest scheduler rewrite and dashboards are just UI wrapping around what already works by then
+## 🖥️ Sample Output
+
+## 🧪 Testing PawPal+
+
+
+## 💾 Persistence — Save Workflow
+
+PawPal+ automatically saves state to a local JSON file (`pawpal_save.json`) so an owner's pets and tasks survive a page reload or app restart.
+
+**How it works:**
+
+1. **On startup**, `app.py` checks if `owner` is already in `st.session_state`. If not, it calls `load_owner()`, which reads `pawpal_save.json` and rebuilds the `Owner` → `Pet` → `Task` objects. If the file doesn't exist yet (first run), `load_owner()` returns `None` and the app starts fresh.
+2. **On every mutation** — clicking "Set Owner & Pet" or "Add task" — `app.py` calls `save_owner(st.session_state.owner)` right after the change. `save_owner()` converts the whole object tree to a dict with `dataclasses.asdict()` and writes it to `pawpal_save.json` with `json.dumps(..., indent=2)`.
+3. Both functions use only the Python standard library (`json`, `pathlib`) — no new dependencies.
+
+
+## 🧪 Testing PawPal+
+
+## 📸 Demo Walkthrough
