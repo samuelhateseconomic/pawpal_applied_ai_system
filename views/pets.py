@@ -1,6 +1,6 @@
 import streamlit as st
 
-from pawpal_system import save_owner
+from pawpal_system import ValidationError, is_recognized_species, save_owner
 
 st.title("🐕 Pets")
 
@@ -40,11 +40,21 @@ if st.button("Add pet", key="add_pet_btn"):
     elif any(p.pet_name == new_pet_name for p in owner.get_pets()):
         st.warning(f"A pet named '{new_pet_name}' already exists.")
     else:
-        pet = owner.add_pet(new_pet_name, new_species)
-        pet.notes = new_notes
-        save_owner(owner)
-        st.success(f"Added '{new_pet_name}'.")
-        st.rerun()
+        try:
+            pet = owner.add_pet(new_pet_name, new_species)
+            if new_notes:
+                owner.edit_pet(new_pet_name, notes=new_notes)
+        except ValidationError as e:
+            st.warning(str(e))
+        else:
+            save_owner(owner)
+            if not is_recognized_species(new_species):
+                st.warning(
+                    f"'{new_species}' isn't on the list of commonly-legal companion animals — "
+                    "double-check local regulations before keeping this pet."
+                )
+            st.success(f"Added '{new_pet_name}'.")
+            st.rerun()
 
 st.divider()
 
@@ -67,13 +77,22 @@ else:
     edit_notes = st.text_area("Notes", value=selected_pet.notes, key="edit_pet_notes")
 
     if st.button("Save changes", key="save_pet_changes_btn"):
-        updated = owner.edit_pet(selected_name, new_name=edit_name, species=edit_species, notes=edit_notes)
-        if updated is None:
-            st.warning(f"Couldn't rename to '{edit_name}' — that name is already taken by another pet.")
+        try:
+            updated = owner.edit_pet(selected_name, new_name=edit_name, species=edit_species, notes=edit_notes)
+        except ValidationError as e:
+            st.warning(str(e))
         else:
-            save_owner(owner)
-            st.success("Pet updated.")
-            st.rerun()
+            if updated is None:
+                st.warning(f"Couldn't rename to '{edit_name}' — that name is already taken by another pet.")
+            else:
+                save_owner(owner)
+                if not is_recognized_species(edit_species):
+                    st.warning(
+                        f"'{edit_species}' isn't on the list of commonly-legal companion animals — "
+                        "double-check local regulations before keeping this pet."
+                    )
+                st.success("Pet updated.")
+                st.rerun()
 
 st.divider()
 

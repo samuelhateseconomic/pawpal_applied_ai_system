@@ -11,7 +11,16 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from pawpal_system import Owner, Pet, Scheduler, save_owner
+from pawpal_system import (
+    MAX_TEXT_WORDS,
+    Owner,
+    Pet,
+    Scheduler,
+    ValidationError,
+    is_recognized_species,
+    save_owner,
+    word_count,
+)
 
 _OMITTED = object()  # sentinel: "caller did not supply this optional field"
 
@@ -28,16 +37,36 @@ def tool_add_pet(owner: Owner, pet_name: str, species: str, notes: str = "") -> 
     {"status": "exists", "pet": {...}} if a pet with that name is
     already registered — add_pet() itself returns the existing pet
     rather than erroring, so this wrapper surfaces that distinctly
-    instead of reporting a false "created".
+    instead of reporting a false "created". Returns
+    {"status": "invalid_input", "reason": "..."} if pet_name/species/notes
+    are too long or the owner already has too many pets.
+
+    A "warning" key, if present, must be relayed to the user verbatim —
+    it means species isn't on PawPal+'s baseline list of commonly-legal
+    companion animals (the pet is still created, not blocked).
     """
     existing = _find_pet(owner, pet_name)
-    pet = owner.add_pet(pet_name, species)
+    if notes and word_count(notes) > MAX_TEXT_WORDS:
+        return {"status": "invalid_input",
+                "reason": f"notes must be under {MAX_TEXT_WORDS} words (got {word_count(notes)})."}
+    try:
+        pet = owner.add_pet(pet_name, species)
+        if existing is None and notes:
+            owner.edit_pet(pet_name, notes=notes)
+    except ValidationError as e:
+        return {"status": "invalid_input", "reason": str(e)}
     if existing is not None:
         return {"status": "exists", "pet": asdict(pet)}
-    if notes:
-        pet.notes = notes
     save_owner(owner)
-    return {"status": "created", "pet": asdict(pet)}
+    result = {"status": "created", "pet": asdict(pet)}
+    if not is_recognized_species(species):
+        result["warning"] = (
+            f"'{species}' isn't on the list of commonly-legal companion animals (dogs/cats, "
+            "small domesticated mammals, rabbits, common cage birds, or common non-venomous "
+            "reptiles/freshwater fish) — some jurisdictions restrict or ban keeping this animal, "
+            "so please double-check local regulations."
+        )
+    return result
 
 
 def tool_edit_pet(owner: Owner, pet_name: str, new_name: str | None = None,
@@ -48,16 +77,32 @@ def tool_edit_pet(owner: Owner, pet_name: str, new_name: str | None = None,
     notes: pass "" to clear existing notes, omit to keep them unchanged.
 
     Returns {"status": "updated", "pet": {...}}, {"status": "not_found"},
-    or {"status": "name_collision"} if new_name matches another pet.
+    {"status": "name_collision"} if new_name matches another pet, or
+    {"status": "invalid_input", "reason": "..."} if a field is too long.
+
+    A "warning" key, if present, must be relayed to the user verbatim —
+    it means the new species isn't on PawPal+'s baseline list of
+    commonly-legal companion animals (the update still goes through).
     """
     pet = _find_pet(owner, pet_name)
     if pet is None:
         return {"status": "not_found", "pet_name": pet_name}
     if new_name is not None and new_name != pet_name and _find_pet(owner, new_name) is not None:
         return {"status": "name_collision", "new_name": new_name}
-    updated = owner.edit_pet(pet_name, new_name=new_name, species=species, notes=notes)
+    try:
+        updated = owner.edit_pet(pet_name, new_name=new_name, species=species, notes=notes)
+    except ValidationError as e:
+        return {"status": "invalid_input", "reason": str(e)}
     save_owner(owner)
-    return {"status": "updated", "pet": asdict(updated)}
+    result = {"status": "updated", "pet": asdict(updated)}
+    if species is not None and not is_recognized_species(species):
+        result["warning"] = (
+            f"'{species}' isn't on the list of commonly-legal companion animals (dogs/cats, "
+            "small domesticated mammals, rabbits, common cage birds, or common non-venomous "
+            "reptiles/freshwater fish) — some jurisdictions restrict or ban keeping this animal, "
+            "so please double-check local regulations."
+        )
+    return result
 
 
 def tool_remove_pet(owner: Owner, pet_name: str, confirm: bool = False) -> dict:
@@ -97,13 +142,17 @@ def tool_add_task(owner: Owner, pet_name: str, title: str, duration_minutes: int
     fixed time, or omit to let the scheduler place it automatically.
 
     Returns {"status": "created", "task": {...}}, {"status": "duplicate_title"},
-    or {"status": "pet_not_found"}.
+    {"status": "pet_not_found"}, or {"status": "invalid_input", "reason": "..."}
+    if description exceeds the word limit.
     """
     pet = _find_pet(owner, pet_name)
     if pet is None:
         return {"status": "pet_not_found", "pet_name": pet_name}
-    task = pet.add_task(title, duration_minutes, priority, description,
-                        frequency_count, frequency_unit, start_time)
+    try:
+        task = pet.add_task(title, duration_minutes, priority, description,
+                            frequency_count, frequency_unit, start_time)
+    except ValidationError as e:
+        return {"status": "invalid_input", "reason": str(e)}
     if task is None:
         return {"status": "duplicate_title", "title": title}
     save_owner(owner)
@@ -120,8 +169,9 @@ def tool_edit_task(owner: Owner, pet_name: str, title: str, *,
     unchanged; pass start_time=None explicitly to unpin a fixed time.
 
     Returns {"status": "updated", "task": {...}}, {"status": "task_not_found"},
-    {"status": "pet_not_found"}, or {"status": "title_collision"} if
-    new_title matches another existing task for this pet.
+    {"status": "pet_not_found"}, {"status": "title_collision"} if new_title
+    matches another existing task for this pet, or {"status": "invalid_input",
+    "reason": "..."} if description exceeds the word limit.
     """
     pet = _find_pet(owner, pet_name)
     if pet is None:
@@ -141,7 +191,10 @@ def tool_edit_task(owner: Owner, pet_name: str, title: str, *,
             any(t.title == kwargs["new_title"] for t in pet.tasks):
         return {"status": "title_collision", "new_title": kwargs["new_title"]}
 
-    task = pet.edit_task(title, **kwargs)
+    try:
+        task = pet.edit_task(title, **kwargs)
+    except ValidationError as e:
+        return {"status": "invalid_input", "reason": str(e)}
     save_owner(owner)
     return {"status": "updated", "task": asdict(task)}
 

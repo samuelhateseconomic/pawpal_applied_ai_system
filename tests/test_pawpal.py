@@ -2,7 +2,20 @@ import json
 from datetime import date, timedelta
 
 import pytest
-from pawpal_system import Owner, Pet, Task, Scheduler, save_owner, load_owner, _active_days
+from pawpal_system import (
+    MAX_NAME_WORDS,
+    MAX_PETS_PER_OWNER,
+    MAX_TEXT_WORDS,
+    Owner,
+    Pet,
+    Task,
+    Scheduler,
+    ValidationError,
+    is_recognized_species,
+    save_owner,
+    load_owner,
+    _active_days,
+)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -672,3 +685,122 @@ class TestOutOfWindowDetection:
         scheduler = Scheduler(tasks, day_start="09:00", day_end="21:00")
         result = scheduler.schedule()
         assert not any("OUT OF WINDOW" in c for c in result.conflicts)
+
+
+# ── 15. Input Bounds ──────────────────────────────────────────────────────────
+
+class TestInputBounds:
+    def test_happy_pet_name_and_species_at_limit_allowed(self, owner):
+        pet_name = " ".join(["Buddy"] * MAX_NAME_WORDS)
+        species = " ".join(["dog"] * MAX_NAME_WORDS)
+        pet = owner.add_pet(pet_name, species)
+        assert pet.pet_name == pet_name
+
+    def test_edge_pet_name_over_limit_raises(self, owner):
+        too_long = " ".join(["Buddy"] * (MAX_NAME_WORDS + 1))
+        with pytest.raises(ValidationError):
+            owner.add_pet(too_long, "dog")
+
+    def test_edge_species_over_limit_raises(self, owner):
+        too_long = " ".join(["dog"] * (MAX_NAME_WORDS + 1))
+        with pytest.raises(ValidationError):
+            owner.add_pet("Buddy", too_long)
+
+    def test_edge_over_limit_pet_name_not_added(self, owner):
+        too_long = " ".join(["Buddy"] * (MAX_NAME_WORDS + 1))
+        with pytest.raises(ValidationError):
+            owner.add_pet(too_long, "dog")
+        assert owner.get_pets() == []
+
+    def test_edge_pet_count_capped_at_max(self, owner):
+        for i in range(MAX_PETS_PER_OWNER):
+            owner.add_pet(f"Pet{i}", "dog")
+        with pytest.raises(ValidationError):
+            owner.add_pet("OneTooMany", "dog")
+        assert len(owner.get_pets()) == MAX_PETS_PER_OWNER
+
+    def test_edge_re_adding_existing_pet_ignores_cap(self, owner):
+        for i in range(MAX_PETS_PER_OWNER):
+            owner.add_pet(f"Pet{i}", "dog")
+        # A duplicate name returns the existing pet rather than counting
+        # against the cap, matching add_pet()'s existing dedupe behavior.
+        pet = owner.add_pet("Pet0", "dog")
+        assert pet.pet_name == "Pet0"
+
+    def test_edge_new_name_over_limit_raises(self, owner):
+        owner.add_pet("Buddy", "dog")
+        too_long = " ".join(["Max"] * (MAX_NAME_WORDS + 1))
+        with pytest.raises(ValidationError):
+            owner.edit_pet("Buddy", new_name=too_long)
+
+    def test_edge_notes_over_limit_raises(self, owner):
+        owner.add_pet("Buddy", "dog")
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        with pytest.raises(ValidationError):
+            owner.edit_pet("Buddy", notes=too_long)
+
+    def test_happy_notes_at_limit_allowed(self, owner):
+        owner.add_pet("Buddy", "dog")
+        at_limit = " ".join(["word"] * MAX_TEXT_WORDS)
+        pet = owner.edit_pet("Buddy", notes=at_limit)
+        assert pet.notes == at_limit
+
+    def test_edge_task_description_over_limit_raises(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        with pytest.raises(ValidationError):
+            pet.add_task("Walk", 30, "high", description=too_long)
+
+    def test_edge_over_limit_task_description_not_added(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        with pytest.raises(ValidationError):
+            pet.add_task("Walk", 30, "high", description=too_long)
+        assert pet.get_tasks() == []
+
+    def test_edge_edit_task_description_over_limit_raises(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        with pytest.raises(ValidationError):
+            pet.edit_task("Walk", description=too_long)
+
+    @pytest.mark.parametrize("bad_duration", [0, -5, "30"])
+    def test_edge_add_task_invalid_duration_raises(self, owner, bad_duration):
+        pet = owner.add_pet("Buddy", "dog")
+        with pytest.raises(ValidationError):
+            pet.add_task("Walk", bad_duration, "high")
+        assert pet.get_tasks() == []
+
+    def test_edge_add_task_invalid_priority_raises(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        with pytest.raises(ValidationError):
+            pet.add_task("Walk", 30, "")
+        assert pet.get_tasks() == []
+
+    def test_edge_add_task_invalid_frequency_unit_raises(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        with pytest.raises(ValidationError):
+            pet.add_task("Walk", 30, "high", frequency_unit="daily")
+        assert pet.get_tasks() == []
+
+    def test_edge_edit_task_invalid_duration_raises_and_leaves_task_unchanged(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        with pytest.raises(ValidationError):
+            pet.edit_task("Walk", duration_minutes=0)
+        assert pet.get_tasks()[0].duration_minutes == 30
+
+    def test_edge_edit_task_invalid_priority_raises_and_leaves_task_unchanged(self, owner):
+        pet = owner.add_pet("Buddy", "dog")
+        pet.add_task("Walk", 30, "high")
+        with pytest.raises(ValidationError):
+            pet.edit_task("Walk", priority="urgent")
+        assert pet.get_tasks()[0].priority == "high"
+
+    def test_happy_recognized_species_not_flagged(self):
+        for species in ("dog", "Cat", "GUINEA PIG", "budgie", "corn snake"):
+            assert is_recognized_species(species)
+
+    def test_edge_unrecognized_species_flagged(self):
+        assert not is_recognized_species("crocodile")

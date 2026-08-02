@@ -4,7 +4,7 @@ import streamlit as st
 from google import genai
 from google.genai import errors
 
-from pawpal_system import Owner, save_owner
+from pawpal_system import MAX_NAME_WORDS, Owner, ValidationError, check_word_limit, save_owner
 from agent_wiring import build_agent
 
 st.title("🐾 PawPal+")
@@ -17,9 +17,14 @@ if "owner" not in st.session_state:
     st.subheader("Get Started")
     name = st.text_input("Your name", value="Jordan")
     if st.button("Create owner", key="create_owner_btn"):
-        st.session_state.owner = Owner(name)
-        save_owner(st.session_state.owner)
-        st.rerun()
+        try:
+            check_word_limit("name", name, MAX_NAME_WORDS)
+        except ValidationError as e:
+            st.warning(str(e))
+        else:
+            st.session_state.owner = Owner(name)
+            save_owner(st.session_state.owner)
+            st.rerun()
     st.stop()
 
 st.success(f"Welcome back, {st.session_state.owner.owner_name}! Head to the **Pets** page to add a pet.")
@@ -32,10 +37,15 @@ with st.expander("✏️ Change your name"):
         if not new_owner_name:
             st.warning("Enter a name.")
         else:
-            st.session_state.owner.owner_name = new_owner_name
-            save_owner(st.session_state.owner)
-            st.success("Name updated.")
-            st.rerun()
+            try:
+                check_word_limit("name", new_owner_name, MAX_NAME_WORDS)
+            except ValidationError as e:
+                st.warning(str(e))
+            else:
+                st.session_state.owner.owner_name = new_owner_name
+                save_owner(st.session_state.owner)
+                st.success("Name updated.")
+                st.rerun()
 
 st.divider()
 

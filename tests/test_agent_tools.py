@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from pawpal_system import Owner, load_owner
+from pawpal_system import MAX_NAME_WORDS, MAX_PETS_PER_OWNER, MAX_TEXT_WORDS, Owner, load_owner
 
 from agent_tools import (
     tool_add_pet, tool_edit_pet, tool_remove_pet,
@@ -109,6 +109,21 @@ class TestToolAddTask:
         result = tool_add_task(pet_with_task, "Buddy", "Morning Walk", 20, "low")
         assert result == {"status": "duplicate_title", "title": "Morning Walk"}
 
+    def test_edge_zero_duration_rejected_not_silently_created(self, owner):
+        # Regression test: a live run once had the model call this with
+        # duration_minutes=0, priority='' instead of asking the user —
+        # this must be rejected, not silently create a garbage task.
+        tool_add_pet(owner, "Buddy", "dog")
+        result = tool_add_task(owner, "Buddy", "Walk", 0, "high")
+        assert result["status"] == "invalid_input"
+        assert owner.get_all_tasks() == []
+
+    def test_edge_empty_priority_rejected_not_silently_created(self, owner):
+        tool_add_pet(owner, "Buddy", "dog")
+        result = tool_add_task(owner, "Buddy", "Walk", 30, "")
+        assert result["status"] == "invalid_input"
+        assert owner.get_all_tasks() == []
+
 
 # ── 5. tool_edit_task ────────────────────────────────────────────────────────
 
@@ -206,3 +221,67 @@ class TestToolCheckSlots:
     def test_edge_pet_not_found(self, owner):
         result = tool_check_slots(owner, 30, pet_name="Ghost")
         assert result == {"status": "pet_not_found", "pet_name": "Ghost"}
+
+
+# ── 9. Input bounds & species warning ────────────────────────────────────────
+
+class TestToolInputBounds:
+    def test_edge_add_pet_name_over_limit_rejected(self, owner):
+        too_long = " ".join(["Buddy"] * (MAX_NAME_WORDS + 1))
+        result = tool_add_pet(owner, too_long, "dog")
+        assert result["status"] == "invalid_input"
+        assert owner.get_pets() == []
+
+    def test_edge_add_pet_species_over_limit_rejected(self, owner):
+        too_long = " ".join(["dog"] * (MAX_NAME_WORDS + 1))
+        result = tool_add_pet(owner, "Buddy", too_long)
+        assert result["status"] == "invalid_input"
+        assert owner.get_pets() == []
+
+    def test_edge_add_pet_notes_over_limit_rejected_before_creation(self, owner):
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        result = tool_add_pet(owner, "Buddy", "dog", notes=too_long)
+        assert result["status"] == "invalid_input"
+        assert owner.get_pets() == []  # rejected before the pet was ever created
+
+    def test_edge_add_pet_hits_owner_pet_cap(self, owner):
+        for i in range(MAX_PETS_PER_OWNER):
+            tool_add_pet(owner, f"Pet{i}", "dog")
+        result = tool_add_pet(owner, "OneTooMany", "dog")
+        assert result["status"] == "invalid_input"
+        assert len(owner.get_pets()) == MAX_PETS_PER_OWNER
+
+    def test_edge_edit_pet_new_name_over_limit_rejected(self, owner):
+        tool_add_pet(owner, "Buddy", "dog")
+        too_long = " ".join(["Max"] * (MAX_NAME_WORDS + 1))
+        result = tool_edit_pet(owner, "Buddy", new_name=too_long)
+        assert result["status"] == "invalid_input"
+
+    def test_happy_add_pet_recognized_species_has_no_warning(self, owner):
+        result = tool_add_pet(owner, "Buddy", "dog")
+        assert "warning" not in result
+
+    def test_edge_add_pet_unrecognized_species_warns_but_still_creates(self, owner):
+        result = tool_add_pet(owner, "Lili", "crocodile")
+        assert result["status"] == "created"
+        assert "warning" in result
+        assert load_owner().get_pets()[0].pet_name == "Lili"  # not blocked, just flagged
+
+    def test_edge_edit_pet_unrecognized_species_warns(self, owner):
+        tool_add_pet(owner, "Buddy", "dog")
+        result = tool_edit_pet(owner, "Buddy", species="crocodile")
+        assert result["status"] == "updated"
+        assert "warning" in result
+
+    def test_edge_add_task_description_over_limit_rejected(self, owner):
+        tool_add_pet(owner, "Buddy", "dog")
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        result = tool_add_task(owner, "Buddy", "Walk", 30, "high", description=too_long)
+        assert result["status"] == "invalid_input"
+
+    def test_edge_edit_task_description_over_limit_rejected(self, owner):
+        tool_add_pet(owner, "Buddy", "dog")
+        tool_add_task(owner, "Buddy", "Walk", 30, "high")
+        too_long = " ".join(["word"] * (MAX_TEXT_WORDS + 1))
+        result = tool_edit_task(owner, "Buddy", "Walk", description=too_long)
+        assert result["status"] == "invalid_input"

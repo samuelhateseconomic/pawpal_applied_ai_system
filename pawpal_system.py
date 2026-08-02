@@ -15,6 +15,66 @@ _LEGACY_FREQUENCY_MAP = {
     "as_needed": (1, "as_needed"),
 }
 
+# Light input bounds: not a defense against a determined bad actor, just a
+# cheap cap on blast radius (spam-dumping, prompt-injection payloads hidden
+# in a field, or an unbounded local JSON file) that doesn't require content
+# moderation or an extra LLM call to enforce.
+MAX_NAME_WORDS = 50   # owner_name / pet_name / species
+MAX_TEXT_WORDS = 200  # task description / pet notes
+MAX_PETS_PER_OWNER = 500
+
+# Baseline companion-animal categories that are commonly legal to keep as a
+# pet. Not exhaustive and not a legal ruling — species outside this list
+# aren't blocked, they just get flagged so the agent can warn the user
+# rather than silently treating them like a dog or cat.
+RECOGNIZED_SPECIES = frozenset({
+    "dog", "cat", "savannah cat",
+    "guinea pig", "mouse", "rat", "chinchilla",
+    "hamster", "golden hamster", "syrian hamster",
+    "rabbit",
+    "canary", "finch", "budgie", "budgerigar",
+    "snake", "king snake", "corn snake",
+    "fish", "freshwater fish",
+})
+
+
+class ValidationError(ValueError):
+    """Raised when user-supplied text/counts exceed PawPal+'s input bounds."""
+
+
+def word_count(text: str) -> int:
+    return len(text.split())
+
+
+def check_word_limit(field: str, text: str, limit: int) -> None:
+    count = word_count(text)
+    if count > limit:
+        raise ValidationError(f"{field} must be under {limit} words (got {count}).")
+
+
+def is_recognized_species(species: str) -> bool:
+    """True if species matches PawPal+'s baseline list of commonly-legal companion animals."""
+    return species.strip().lower() in RECOGNIZED_SPECIES
+
+
+VALID_PRIORITIES = frozenset({"high", "medium", "low"})
+VALID_FREQUENCY_UNITS = frozenset({"day", "week", "month", "as_needed"})
+
+
+def check_duration(duration_minutes: Any) -> None:
+    if not isinstance(duration_minutes, int) or duration_minutes <= 0:
+        raise ValidationError(f"duration_minutes must be a positive integer (got {duration_minutes!r}).")
+
+
+def check_priority(priority: Any) -> None:
+    if priority not in VALID_PRIORITIES:
+        raise ValidationError(f"priority must be one of {sorted(VALID_PRIORITIES)} (got {priority!r}).")
+
+
+def check_frequency_unit(frequency_unit: Any) -> None:
+    if frequency_unit not in VALID_FREQUENCY_UNITS:
+        raise ValidationError(f"frequency_unit must be one of {sorted(VALID_FREQUENCY_UNITS)} (got {frequency_unit!r}).")
+
 
 class ScheduleResult(NamedTuple):
     tasks: list[Task]
@@ -113,9 +173,15 @@ class Pet:
                  frequency_unit: str = "day",
                  start_time: str | None = None) -> Task | None:
         """Create and append a Task. Returns None if a task with that title already exists.
-        Pass start_time='HH:MM' to pin the task to a fixed slot; assign_times() will skip it."""
+        Pass start_time='HH:MM' to pin the task to a fixed slot; assign_times() will skip it.
+        Raises ValidationError if description exceeds MAX_TEXT_WORDS words, duration_minutes
+        isn't a positive integer, or priority/frequency_unit is unrecognized."""
         if any(t.title == title for t in self.tasks):
             return None
+        check_word_limit("description", description, MAX_TEXT_WORDS)
+        check_duration(duration_minutes)
+        check_priority(priority)
+        check_frequency_unit(frequency_unit)
         task = Task(title, duration_minutes, priority, description,
                     frequency_count, frequency_unit,
                     start_time=start_time, pet_name=self.pet_name)
@@ -148,7 +214,9 @@ class Pet:
         (the default) is left unchanged. Pass start_time=None explicitly to
         unpin a fixed time. Returns the updated Task, or None if not found.
         Rename is rejected (returns None, task left unmodified) if new_title
-        collides with another existing task's title.
+        collides with another existing task's title. Raises ValidationError
+        if description exceeds MAX_TEXT_WORDS words, duration_minutes isn't
+        a positive integer, or priority/frequency_unit is unrecognized.
         """
         task = next((t for t in self.tasks if t.title == title), None)
         if task is None:
@@ -158,14 +226,18 @@ class Pet:
                 return None
             task.title = new_title
         if duration_minutes is not _UNSET:
+            check_duration(duration_minutes)
             task.duration_minutes = duration_minutes
         if priority is not _UNSET:
+            check_priority(priority)
             task.priority = priority
         if description is not _UNSET:
+            check_word_limit("description", description, MAX_TEXT_WORDS)
             task.description = description
         if frequency_count is not _UNSET:
             task.frequency_count = frequency_count
         if frequency_unit is not _UNSET:
+            check_frequency_unit(frequency_unit)
             task.frequency_unit = frequency_unit
         if start_time is not _UNSET:
             task.start_time = start_time
@@ -186,10 +258,18 @@ class Owner:
         self.pets: list[Pet] = []
 
     def add_pet(self, pet_name: str, species: str) -> Pet:
-        """Return the existing pet if the name already exists, otherwise create and add one."""
+        """
+        Return the existing pet if the name already exists, otherwise create and add one.
+        Raises ValidationError if pet_name/species exceed MAX_NAME_WORDS words, or if the
+        owner already has MAX_PETS_PER_OWNER pets.
+        """
         existing = next((p for p in self.pets if p.pet_name == pet_name), None)
         if existing:
             return existing
+        check_word_limit("pet_name", pet_name, MAX_NAME_WORDS)
+        check_word_limit("species", species, MAX_NAME_WORDS)
+        if len(self.pets) >= MAX_PETS_PER_OWNER:
+            raise ValidationError(f"Cannot add more than {MAX_PETS_PER_OWNER} pets.")
         pet = Pet(pet_name, species)
         self.pets.append(pet)
         return pet
@@ -209,20 +289,24 @@ class Owner:
         "leave unchanged" for each param (pass notes="" to clear notes text).
         Returns the updated Pet, or None if not found. Rename is rejected
         (returns None, pet left unmodified) if new_name collides with another
-        existing pet.
+        existing pet. Raises ValidationError if new_name/species exceed
+        MAX_NAME_WORDS words, or notes exceeds MAX_TEXT_WORDS words.
         """
         pet = next((p for p in self.pets if p.pet_name == pet_name), None)
         if pet is None:
             return None
         if new_name is not None and new_name != pet_name:
+            check_word_limit("new_name", new_name, MAX_NAME_WORDS)
             if any(p.pet_name == new_name for p in self.pets):
                 return None
             pet.pet_name = new_name
             for t in pet.tasks:
                 t.pet_name = new_name  # keep Task.pet_name in sync — read by Scheduler.detect_conflicts and app.py
         if species is not None:
+            check_word_limit("species", species, MAX_NAME_WORDS)
             pet.species = species
         if notes is not None:
+            check_word_limit("notes", notes, MAX_TEXT_WORDS)
             pet.notes = notes
         return pet
 

@@ -2,7 +2,7 @@ from datetime import time
 
 import streamlit as st
 
-from pawpal_system import save_owner
+from pawpal_system import ValidationError, save_owner
 
 st.title("📋 Tasks")
 
@@ -69,14 +69,18 @@ if st.button("Add task", key="add_task_btn"):
         st.warning("Enter a task title.")
     else:
         pinned = fixed_time.strftime("%H:%M") if pin_time else None
-        result = pet.add_task(title, int(duration), priority, note,
-                               int(freq_count), freq_unit, start_time=pinned)
-        if result is None:
-            st.warning(f"A task named '{title}' already exists for {selected_name}.")
+        try:
+            result = pet.add_task(title, int(duration), priority, note,
+                                   int(freq_count), freq_unit, start_time=pinned)
+        except ValidationError as e:
+            st.warning(str(e))
         else:
-            save_owner(owner)
-            st.success(f"Task '{title}' added.")
-            st.rerun()
+            if result is None:
+                st.warning(f"A task named '{title}' already exists for {selected_name}.")
+            else:
+                save_owner(owner)
+                st.success(f"Task '{title}' added.")
+                st.rerun()
 
 st.divider()
 
@@ -109,17 +113,21 @@ else:
 
     if st.button("Save task changes", key="save_task_changes_btn"):
         new_start = e_fixed_time.strftime("%H:%M") if e_pin_time else None
-        updated = pet.edit_task(
-            edit_title, new_title=e_title, duration_minutes=int(e_duration),
-            priority=e_priority, description=e_note, frequency_count=int(e_freq_count),
-            frequency_unit=e_freq_unit, start_time=new_start,
-        )
-        if updated is None:
-            st.warning(f"Couldn't rename to '{e_title}' — that title is already taken for this pet.")
+        try:
+            updated = pet.edit_task(
+                edit_title, new_title=e_title, duration_minutes=int(e_duration),
+                priority=e_priority, description=e_note, frequency_count=int(e_freq_count),
+                frequency_unit=e_freq_unit, start_time=new_start,
+            )
+        except ValidationError as e:
+            st.warning(str(e))
         else:
-            save_owner(owner)
-            st.success("Task updated.")
-            st.rerun()
+            if updated is None:
+                st.warning(f"Couldn't rename to '{e_title}' — that title is already taken for this pet.")
+            else:
+                save_owner(owner)
+                st.success("Task updated.")
+                st.rerun()
 
 st.divider()
 
