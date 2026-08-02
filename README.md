@@ -62,7 +62,7 @@ Full detailed diagrams (component, sequence, tool-mapping matrix, guardrail spec
 2. **Create and activate a virtual environment** (already present as `.venv/` — recreate if needed):
    ```bash
    python -m venv .venv
-   .venv\Scripts\activate      # Windows
+   source .venv/Scripts/activate      # Windows
    source .venv/bin/activate   # macOS/Linux
    ```
 
@@ -88,9 +88,15 @@ Full detailed diagrams (component, sequence, tool-mapping matrix, guardrail spec
    ```
 
 7. **Run the test suite:**
+1. Agent test 
    ```bash
    pytest tests/test_agent_tools.py -v
    ```
+2. AI-live test (calls the real Gemini API, needs `GEMINI_API_KEY` in `.env` — excluded from the default run above, so `-m live_api` is required to actually select it):
+   ```bash
+   pytest tests/test_agent_live.py -m live_api -v
+   ```
+
 
 ---
 
@@ -172,3 +178,6 @@ Besides, the best trade-offs I made is instead of using chat or AI memory to rem
 
 ## Reflection
 This project taught me a great lesson of how to apply AI into a daily tasks especially when the system has so many functions and how to optimize the system and control the AI input. Besides, I have learned that I should be always the active spectator for the project as it can flaw in so many ways that even us do not expect. The framework and Agent work are not a completed parallel. 
+
+## Demo Video
+https://www.loom.com/share/da6ff845a87d417e9cabd209c305dbfd
