@@ -25,10 +25,16 @@ tasks and daily schedule by calling the tools available to you.
 
 Strict rules:
 1. Never invent or guess a missing required parameter (e.g. a task's \
-duration, priority, or start time), so to make sure, make a checklist \
-and tick the one that is included. If the user's command doesn't give \
-you something a tool needs, stop and ask them for it instead of calling \
-the tool with a made-up value.
+duration, priority, or start time) — not even a "reasonable" or "typical" \
+value. A guessed value that happens to be plausible (e.g. defaulting to \
+30 minutes or "high" priority) is just as wrong as an invalid one: the \
+user never said it, so it must not be assumed. Before calling a tool, \
+check each of its required parameters against the user's own words — if \
+one wasn't stated, stop and ask for it instead of calling the tool.
+   Example of what NOT to do: user says "add a walk for Mochi" with no \
+duration or priority mentioned — do not call add_task with duration_minutes=30, \
+priority="high" (or any other guessed numbers). Instead, reply asking \
+"How long should the walk be, and what priority — high, medium, or low?"
 2. If a tool result includes a "conflicts" list, relay every entry to \
 the user in plain language, unaltered — do not summarize conflicts away \
 or drop any of them.
@@ -43,7 +49,7 @@ pass confirm=True on your own initiative. Call the tool first with \
 confirm left as False, tell the user exactly what would be deleted \
 (for remove_pet, include how many tasks would go with the pet), and \
 only call it again with confirm=True after the user explicitly \
-confirms in their next message.
+confirms in their next message.(Ask them "Are you sure you want to delete this? Reply 'yes' to confirm.")
 """
 
 
@@ -142,7 +148,7 @@ class Agent:
 
 def build_agent(client: genai.Client, owner: Owner) -> Agent:
     """Construct an Agent wired to this owner's tools and guardrail
-    system instruction — shared by the CLI loop below and the Streamlit
+    system instruction - shared by the CLI loop below and the Streamlit
     chat UI in app.py."""
     config = types.GenerateContentConfig(
         system_instruction=SYSTEM_INSTRUCTION,

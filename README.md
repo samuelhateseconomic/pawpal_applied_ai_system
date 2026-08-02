@@ -89,7 +89,7 @@ Full detailed diagrams (component, sequence, tool-mapping matrix, guardrail spec
 
 7. **Run the test suite:**
    ```bash
-   pytest
+   pytest tests/test_agent_tools.py -v
    ```
 
 ---
@@ -138,26 +138,37 @@ Task ran:
    ↳ {'result': {'status': 'ok', 'tasks': [{'title': 'Daily feeding', 'duration_minutes': 30, 'priority': 'high', 'description': 'Feeding time', 'frequency_count': 1, 'frequency_unit': 'day', 'completion_status': 'pending', 'start_time': '12:00', 'due_date': None, 'pet_name': 'Lili'}], 'conflicts': []}}
 ### 4th Sample - Delete a Pet
 User: 
+   Help me delete Mochi
+Output: 
+   Are you sure you want to delete Mochi? This action is irreversible and will also delete 1 task associated with them. Please confirm if you would like me to proceed.
+Task ran: 
+   🔧 ran remove_pet(pet_name='Mochi', confirm=False)
+
+   ↳ {'result': {'status': 'confirm_required', 'pet_name': 'Mochi', 'deleted_task_count': 1}}
+User: 
+   no
+Output:
+   Understood. I have not deleted Mochi, and no changes have been made.
 ---
 
 ## Design Decisions
+I build the AI assistant to help the user to control their pets and tasks because it is more applicable compared to task recommendation, which is strongly sensitive as it need a library or reliable resources to give an appropriate, safe, context-included recommendation to the user which is, to me, extremely hard to control.
 
-*(left intentionally empty — to be filled in)*
+Besides, the best trade-offs I made is instead of using chat or AI memory to remember each of the pet tasks, I direct this to function-dependence as it will run the function then use the result to test, which is significantly credit-saving, especially when local-database gets bigger.
 
 ---
 
 ## Testing Summary
 
-**What was tested:** the full tool layer (`agent_tools.py`) and the underlying scheduling engine (`pawpal_system.py`), covering both happy paths and edge cases — duplicate names, missing pets/tasks, name/title collisions, and schedule conflicts — via the pytest suite in `tests/` (`test_agent_tools.py`, `test_pawpal.py`, `test_views.py`).
+**What was tested:** the full tool layer (`agent_tools.py`) and the underlying scheduling engine (`pawpal_system.py`), covering both happy paths and edge cases - duplicate names, missing pets/tasks, name/title collisions, and schedule conflicts - via the pytest suite in `tests/` (`test_agent_tools.py`, `test_pawpal.py`, `test_views.py`). On top of that, `tests/test_agent_live.py` calls the real Gemini API end-to-end - it's opt-in (`pytest -m live_api`, excluded from the default `pytest` run) since it costs quota and depends on an external service, and it checks observable state (was anything actually created/deleted) rather than the model's exact wording, since only the former is deterministic.
 
 **What worked:** the core CRUD operations (add/edit/delete pets and tasks) and the window-filling scheduler - anchored (fixed-time) tasks correctliest window they fit in by priority, then duration.
 
-**What didn't work initially:** the first scheduler used a single moving cursor that jumped past anchor tasks without looking back, wasting open gaps before an anchor (e.g. a 09:00–10:00 window before a 10:00 vet visit). This was replaced with a window-filling algorithm that tracks a separate fill cursor per time window.
+**What didn't work initially:** the first scheduler used a single moving cursor that jumped past anchor tasks without looking back, wasting open gaps before an anchor (e.g. a 09:00–10:00 window before a 10:00 vet visit). This was replaced with a window-filling algorithm that tracks a separate fill cursor per time window. Separately, the very first run of the live-API test caught a real guardrail gap: the model called `add_task` with `duration_minutes=0, priority=''` instead of asking for real values — technically satisfying the tool schema's "required" constraint while still inventing data. A prompt instruction alone wasn't enough to stop it, same as an earlier issue where the agent deleted a pet without confirming first; both were fixed the same way — with a hard, code-level check (`ValidationError` in `pawpal_system.py` for invalid duration/priority, a `confirm=True` gate for deletions) instead of trusting the model to follow instructions.
 
-**What was learned:** AI-suggested fixes need to be read and verified line-by-line, e.g. one AI suggestion attempted to fix the scheduler in a way that would have stripped the user's ability to set their own fixed times, which would have silently removed a feature rather than fixed the bug. Testing tool functions directly (no LLM involved) before ever wiring up the agent made bugs much faster to isolate, since a failure could only be in the deterministic code, not in LLM behavior.
+**What was learned:** AI-suggested fixes need to be read and verified line-by-line, e.g. one AI suggestion attempted to fix the scheduler in a way that would have stripped the user's ability to set their own fixed times, which would have silently removed a feature rather than fixed the bug. Testing tool functions directly (no LLM involved) before ever wiring up the agent made bugs much faster to isolate, since a failure could only be in the deterministic code, not in LLM behavior. The live-API test drove home the same lesson at the agent level: a soft "please don't do X" instruction to the model is not a guardrail — only a rejection the code actually enforces is.
 
 ---
 
 ## Reflection
-
-*(see [reflection.md](reflection.md) for the full design/testing/AI-collaboration writeup)*
+This project taught me a great lesson of how to apply AI into a daily tasks especially when the system has so many functions and how to optimize the system and control the AI input. Besides, I have learned that I should be always the active spectator for the project as it can flaw in so many ways that even us do not expect. The framework and Agent work are not a completed parallel. 
